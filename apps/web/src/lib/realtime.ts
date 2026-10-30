@@ -8,6 +8,10 @@ export function repositoryProgressKey(workspaceId: string, repositoryId: string)
   return ["repository-progress", workspaceId, repositoryId];
 }
 
+export function observabilityLiveKey(workspaceId: string): QueryKey {
+  return ["obs-live", workspaceId];
+}
+
 export function reconnectDelay(attempt: number): number {
   return Math.min(30_000, 1000 * 2 ** Math.max(0, attempt));
 }
@@ -43,6 +47,16 @@ export async function invalidateRealtimeEvent(
       ["service-mappings", activeWorkspaceId], ["suspect-changes", activeWorkspaceId],
     ];
     if (repositoryId) keys.push(["repository", activeWorkspaceId, repositoryId], ["repository-activity", activeWorkspaceId, repositoryId]);
+    await Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({queryKey})));
+  }
+  if (event.type.startsWith("observability.")) {
+    queryClient.setQueryData(observabilityLiveKey(activeWorkspaceId), {type: event.type, occurred_at: event.occurred_at, ...event.data});
+    const keys: QueryKey[] = [
+      ["obs-pipeline", activeWorkspaceId], ["obs-signals", activeWorkspaceId], ["obs-sources", activeWorkspaceId],
+      ["obs-dead-letters", activeWorkspaceId], ["obs-incident", activeWorkspaceId],
+    ];
+    const signalId = event.data.signal_id;
+    if (typeof signalId === "string") keys.push(["obs-signal", activeWorkspaceId, signalId]);
     await Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({queryKey})));
   }
   if (event.type.startsWith("knowledge.")) {

@@ -452,6 +452,15 @@ def _code_tool(name: str) -> ToolFunction:
     return run
 
 
+def _observability_tool(name: str) -> ToolFunction:
+    def run(session: Session, context: ToolContext, raw: dict[str, Any]) -> ToolResult:
+        from opspilot_api.observability.tools import OBSERVABILITY_TOOLS
+
+        return OBSERVABILITY_TOOLS[name](session, context, raw)
+
+    return run
+
+
 TOOL_REGISTRY: dict[str, ToolFunction] = {
     "get_incident_context": get_incident_context,
     "get_incident_timeline": get_incident_timeline,
@@ -467,6 +476,10 @@ TOOL_REGISTRY: dict[str, ToolFunction] = {
     "search_repository_code": _code_tool("search_repository_code"),
     "get_code_excerpt": _code_tool("get_code_excerpt"),
     "get_pull_request_context": _code_tool("get_pull_request_context"),
+    "query_service_logs": _observability_tool("query_service_logs"),
+    "get_service_metrics": _observability_tool("get_service_metrics"),
+    "compare_metric_windows": _observability_tool("compare_metric_windows"),
+    "get_alarm_context": _observability_tool("get_alarm_context"),
 }
 
 

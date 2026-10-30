@@ -25,6 +25,7 @@ from opspilot_api.middleware import (
     CorrelationIdMiddleware,
     EventPayloadLimitMiddleware,
 )
+from opspilot_api.observability.router import router as observability_router
 from opspilot_api.repositories.router import router as repositories_router
 
 logger = logging.getLogger(__name__)
@@ -72,4 +73,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(investigations_router)
     app.include_router(knowledge_router)
     app.include_router(repositories_router)
+    app.include_router(observability_router)
     return app

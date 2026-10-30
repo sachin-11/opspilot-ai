@@ -85,6 +85,11 @@ jobs:
       EMBEDDING_DIMENSIONS: "64"
       RERANK_PROVIDER: fake
       GITHUB_PROVIDER: fixture
+      EVENT_BUS_BACKEND: kafka
+      KAFKA_BOOTSTRAP_SERVERS: "127.0.0.1:19092"
+      REQUIRE_KAFKA: "1"
+      # Throwaway Fernet key for ephemeral CI containers; not a real secret.
+      OBS_SECRET_ENCRYPTION_KEY: mzn9nB8mYQ4Qd1yq0Z3sT0w6mYJm5J7B7xk3T4p8o9U=
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -97,13 +102,27 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy
       - run: uv run pytest
+      - name: Start Kafka-compatible broker (Redpanda)
+        run: |
+          docker run -d --name broker -p 127.0.0.1:19092:19092 \
+            docker.redpanda.com/redpandadata/redpanda:v24.2.7 redpanda start \
+            --mode=dev-container --smp=1 --memory=512M --reserve-memory=0M \
+            --overprovisioned --node-id=0 --check=false \
+            --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092 \
+            --advertise-kafka-addr internal://127.0.0.1:9092,external://127.0.0.1:19092
+          for attempt in $(seq 1 60); do
+            if docker exec broker rpk cluster health | grep -qE 'Healthy:.+true'; then exit 0; fi
+            sleep 2
+          done
+          docker logs broker
+          exit 1
       - name: Apply Alembic migrations
         run: uv run alembic upgrade head
       - name: Set up durable LangGraph checkpoints
         run: uv run python -m opspilot_api.investigations.checkpoint_setup
       - name: Validate migration downgrade and re-upgrade
         run: uv run alembic downgrade 0001 && uv run alembic upgrade head
-      - name: Integration tests (live PostgreSQL + Redis)
+      - name: Integration tests (live PostgreSQL, Redis, and the Kafka-compatible broker)
         run: uv run pytest -m integration
       - name: Deterministic retrieval evaluation
         run: >-
@@ -111,6 +130,8 @@ jobs:
           --dataset tests/fixtures/retrieval_evaluation.json
           --json-output retrieval-evaluation.json
           --markdown-output retrieval-evaluation.md
+      - name: Deterministic pipeline smoke test
+        run: uv run python -m opspilot_api.observability.smoke
       - name: Deterministic code-search and change-correlation evaluation
         run: >-
           uv run python -m opspilot_api.repositories.evaluation

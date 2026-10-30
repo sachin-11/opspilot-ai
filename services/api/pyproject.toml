@@ -5,11 +5,16 @@ description = "OpsPilot AI backend: FastAPI API and RQ worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.1",
+    "boto3>=1.43.122",
+    "confluent-kafka>=2.16.1",
     "fastapi>=0.162.0",
     "httpx>=0.28.1",
     "langgraph>=1.2.18",
     "langgraph-checkpoint-postgres>=3.2.0",
+    "opentelemetry-api>=1.45.2",
+    "opentelemetry-sdk>=1.45.2",
     "pgvector>=0.5.1",
+    "prometheus-client>=0.26.0",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.2",
     "pyjwt[crypto]>=2.15.1",
@@ -50,6 +55,8 @@ select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
+# Long literal payloads/assertions in the observability scenario tests stay readable inline.
+"tests/test_observability_*.py" = ["E501", "S101", "S105", "S106"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -58,7 +65,7 @@ files = ["src", "tests", "migrations"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["rq.*"]
+module = ["rq.*", "boto3.*", "botocore.*", "confluent_kafka.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

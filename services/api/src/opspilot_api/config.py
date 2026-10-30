@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     AI_PROVIDER_RETRIES: int = Field(default=2, ge=0, le=5)
     AI_MAX_RUNTIME_SECONDS: int = Field(default=300, ge=30, le=1800)
     AI_MAX_LLM_CALLS: int = Field(default=8, ge=1, le=50)
-    AI_MAX_TOOL_CALLS: int = Field(default=14, ge=1, le=50)
+    AI_MAX_TOOL_CALLS: int = Field(default=20, ge=1, le=50)
     AI_MAX_RETRIES_PER_NODE: int = Field(default=1, ge=0, le=3)
     AI_MAX_EVIDENCE_ITEMS: int = Field(default=50, ge=5, le=200)
     AI_MAX_TOOL_OUTPUT_BYTES: int = Field(default=65536, ge=1024, le=1048576)
@@ -147,6 +147,27 @@ class Settings(BaseSettings):
     # Hybrid results with no lexical match must clear this stricter vector bar.
     REPO_MIN_HYBRID_VECTOR_RELEVANCE: float = Field(default=0.6, ge=-1, le=1)
 
+    EVENT_BUS_BACKEND: str = Field(default="kafka", pattern="^(kafka|memory)$")
+    KAFKA_BOOTSTRAP_SERVERS: str = Field(default="127.0.0.1:19092", min_length=1)
+    KAFKA_TOPIC_PREFIX: str = Field(default="opspilot.observability", min_length=1, max_length=100)
+    KAFKA_PARTITIONS: int = Field(default=3, ge=1, le=64)
+    KAFKA_PRODUCE_TIMEOUT_SECONDS: float = Field(default=5, gt=0, le=60)
+    OBS_SECRET_ENCRYPTION_KEY: SecretStr | None = None
+    OBS_WEBHOOK_MAX_BYTES: int = Field(default=262_144, ge=1024, le=5_242_880)
+    OBS_WEBHOOK_REPLAY_WINDOW_SECONDS: int = Field(default=300, ge=30, le=3600)
+    OBS_WORKSPACE_RATE_PER_SECOND: int = Field(default=200, ge=1, le=100_000)
+    OBS_SOURCE_RATE_PER_SECOND: int = Field(default=100, ge=1, le=100_000)
+    OBS_LAG_THRESHOLD: int = Field(default=5000, ge=1)
+    OBS_DEAD_LETTER_RATE_THRESHOLD: int = Field(default=50, ge=1)
+    OBS_RETRY_MAX_ATTEMPTS: int = Field(default=5, ge=1, le=20)
+    OBS_RETRY_MAX_AGE_SECONDS: int = Field(default=900, ge=10, le=86_400)
+    OBS_RETRY_BASE_DELAY_SECONDS: float = Field(default=0.5, ge=0, le=60)
+    OBS_DEDUP_WINDOW_SECONDS: int = Field(default=300, ge=1, le=86_400)
+    OBS_METRICS_PORT: int = Field(default=9108, ge=1, le=65535)
+    OBS_CLOUDWATCH_MAX_WINDOW_MINUTES: int = Field(default=120, ge=1, le=1440)
+    OBS_CLOUDWATCH_MAX_RESULTS: int = Field(default=100, ge=1, le=1000)
+    OBS_CLOUDWATCH_TIMEOUT_SECONDS: float = Field(default=10, gt=0, le=60)
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -159,6 +180,7 @@ class Settings(BaseSettings):
         "GITHUB_APP_PRIVATE_KEY",
         "GITHUB_APP_PRIVATE_KEY_FILE",
         "GITHUB_WEBHOOK_SECRET",
+        "OBS_SECRET_ENCRYPTION_KEY",
         mode="before",
     )
     @classmethod

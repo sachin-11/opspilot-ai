@@ -68,6 +68,22 @@ x-api-env: &api-env
   RERANK_API_KEY: ${RERANK_API_KEY:-}
   RERANK_CANDIDATE_LIMIT: ${RERANK_CANDIDATE_LIMIT:-20}
   KNOWLEDGE_EXPERIMENTAL_QUERY_ENHANCEMENT: ${KNOWLEDGE_EXPERIMENTAL_QUERY_ENHANCEMENT:-false}
+  EVENT_BUS_BACKEND: ${EVENT_BUS_BACKEND:-kafka}
+  KAFKA_BOOTSTRAP_SERVERS: broker:9092
+  KAFKA_TOPIC_PREFIX: ${KAFKA_TOPIC_PREFIX:-opspilot.observability}
+  KAFKA_PARTITIONS: ${KAFKA_PARTITIONS:-3}
+  KAFKA_PRODUCE_TIMEOUT_SECONDS: ${KAFKA_PRODUCE_TIMEOUT_SECONDS:-5}
+  OBS_SECRET_ENCRYPTION_KEY: ${OBS_SECRET_ENCRYPTION_KEY:-}
+  OBS_WEBHOOK_MAX_BYTES: ${OBS_WEBHOOK_MAX_BYTES:-262144}
+  OBS_WEBHOOK_REPLAY_WINDOW_SECONDS: ${OBS_WEBHOOK_REPLAY_WINDOW_SECONDS:-300}
+  OBS_WORKSPACE_RATE_PER_SECOND: ${OBS_WORKSPACE_RATE_PER_SECOND:-200}
+  OBS_SOURCE_RATE_PER_SECOND: ${OBS_SOURCE_RATE_PER_SECOND:-100}
+  OBS_LAG_THRESHOLD: ${OBS_LAG_THRESHOLD:-5000}
+  OBS_DEAD_LETTER_RATE_THRESHOLD: ${OBS_DEAD_LETTER_RATE_THRESHOLD:-50}
+  OBS_RETRY_MAX_ATTEMPTS: ${OBS_RETRY_MAX_ATTEMPTS:-5}
+  OBS_RETRY_MAX_AGE_SECONDS: ${OBS_RETRY_MAX_AGE_SECONDS:-900}
+  OBS_RETRY_BASE_DELAY_SECONDS: ${OBS_RETRY_BASE_DELAY_SECONDS:-0.5}
+  OBS_DEDUP_WINDOW_SECONDS: ${OBS_DEDUP_WINDOW_SECONDS:-300}
   GITHUB_PROVIDER: ${GITHUB_PROVIDER:-fixture}
   GITHUB_FIXTURE_REBASE_TO_NOW: ${GITHUB_FIXTURE_REBASE_TO_NOW:-false}
   GITHUB_APP_ID: ${GITHUB_APP_ID:-}
@@ -163,6 +179,88 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  broker:
+    # Kafka-compatible single-node broker (Redpanda, no ZooKeeper). The external listener exists
+    # only for host-run tests/benchmarks and is bound to loopback.
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://broker:9092,external://127.0.0.1:${KAFKA_HOST_PORT:-19092}
+    ports:
+      - "127.0.0.1:${KAFKA_HOST_PORT:-19092}:19092"
+    volumes:
+      - broker_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  broker-init:
+    # One-shot, idempotent topic bootstrap.
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        for t in raw normalized dead-letter; do
+        rpk topic create ${KAFKA_TOPIC_PREFIX:-opspilot.observability}.$$t.v1 -p 3 -r 1 -X brokers=broker:9092 || true;
+        done
+    depends_on:
+      broker:
+        condition: service_healthy
+    restart: "no"
+
+  raw-consumer:
+    build: *api-build
+    image: opspilot-api:dev
+    command: ["python", "-m", "opspilot_api.observability.consumer", "--role", "raw"]
+    environment: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      broker-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:9108/metrics', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    restart: unless-stopped
+
+  normalized-consumer:
+    build: *api-build
+    image: opspilot-api:dev
+    command: ["python", "-m", "opspilot_api.observability.consumer", "--role", "normalized"]
+    environment: *api-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      broker-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:9109/metrics', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    restart: unless-stopped
+
   web:
     build:
       context: ./apps/web
@@ -184,6 +282,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  broker_data:
   postgres_data:
   redis_data:
   knowledge_data:

@@ -1,4 +1,4 @@
-# OpsPilot AI - Architecture (Modules 0-4)
+# OpsPilot AI - Architecture (Modules 0-5)
 
 ## Container view
 
@@ -389,3 +389,129 @@ Tools call no provider, so a GitHub outage cannot fail an investigation; they re
 
 ### Rate limits and failure handling
 `ProviderRateLimitError` carries a retry delay derived from `Retry-After` or the rate-limit reset header. Jobs reschedule themselves with the RQ scheduler (bounded by `REPO_RATE_LIMIT_MAX_RETRIES`; transient outages use exponential backoff), the repository is marked `failed` with a sanitized code while its last ready snapshot stays searchable, and the last observed rate-limit headers are stored on the installation without credentials. Authentication failures are not retried. Stale `indexing`/`syncing` work left by a crashed worker is failed at worker startup.
+
+## Module 5 observability pipeline
+
+The pipeline turns external production signals into Module 1 incident events without any step that can silently lose or duplicate one. It adds one infrastructure component, a Kafka-compatible broker (Redpanda locally, no ZooKeeper), behind an `EventBus` abstraction; PostgreSQL stays the system of record and Redis stays the WebSocket fan-out and rate-limit state store.
+
+### Webhook ingress
+`POST /api/v1/ingest/webhooks/{public_id}` addresses a source by an unguessable 192-bit public ID. The handler reads raw bytes (bounded before any parsing), recomputes `HMAC-SHA256("{timestamp}.{raw body}")` with the source secret in constant time, rejects missing/invalid/expired signatures (replay window `OBS_WEBHOOK_REPLAY_WINDOW_SECONDS`), and only then parses JSON, checks backpressure, and accepts the signal. Acceptance is *durable*: the receipt row is committed and the raw-topic record is acknowledged by the broker (`acks=all`, idempotent producer) before HTTP 202. No incident work happens in the request. Secrets are generated with 256 bits of entropy, shown once, and stored Fernet-encrypted (`OBS_SECRET_ENCRYPTION_KEY`); stronger key management is deferred to a deployment/security module.
+
+```mermaid
+sequenceDiagram
+    participant S as External system
+    participant API as FastAPI ingress
+    participant PG as PostgreSQL
+    participant K as Kafka-compatible broker
+    participant R as Raw consumer
+    participant N as Normalized consumer
+    participant M1 as Module 1 ingest_event
+    S->>API: POST webhook (raw body, timestamp, signature)
+    API->>API: size limit, HMAC, replay window, JSON, backpressure
+    API->>PG: insert SignalReceipt (unique ingress key) = received
+    alt duplicate ingress key / event id
+        API-->>S: 200 duplicate (original signal_id)
+    else new
+        API->>K: publish raw (key workspace:service, acks=all)
+        alt not acknowledged
+            API->>PG: receipt = failed(publish_failed)
+            API-->>S: 503 Retry-After (never 202)
+        else acknowledged
+            API->>PG: receipt = published (guarded)
+            API-->>S: 202 accepted
+        end
+    end
+    R->>K: consume raw
+    R->>R: validate schema, normalize, redact
+    R->>K: publish normalized
+    R->>PG: receipt = normalized (guarded) then commit offset
+    N->>K: consume normalized
+    N->>PG: receipt state + duplicate check
+    N->>M1: ingest_event (idempotent, commits incident+timeline)
+    N->>PG: receipt = processed, then commit offset
+    N-->>S: WebSocket observability.signal_processed
+```
+
+### Topics, keys, and ordering
+`opspilot.observability.raw.v1`, `.normalized.v1`, and `.dead-letter.v1` (three partitions locally). The record key is `workspace_id:service_id`, so one service's signals share a partition and are consumed in publish order; signals of different services (or workspaces) may interleave. Ordering is therefore guaranteed *per workspace+service only*, and not across the raw and normalized stages when retries occur. Headers carry routing metadata only (`schema_version`, `signal_id`, `workspace_id`, `source_id`, `replay_of`); the bus drops any other header, so credentials cannot travel as headers. Messages carry a schema version; an unsupported version is dead-lettered, never processed as a current message.
+
+### Consumer responsibilities
+* **Raw consumer** (`--role raw`, group `opspilot-raw-consumer`): validate envelope and version, verify the source belongs to the stated workspace/service, normalize deterministically (no LLM), redact, publish the normalized record, mark the receipt `normalized` (guarded so it can never downgrade a later state), then commit.
+* **Normalized consumer** (`--role normalized`, group `opspilot-normalized-consumer`): validate, persist normalized state, suppress duplicates, call the existing Module 1 `ingest_event` (no correlation logic is duplicated), update the receipt, publish WebSocket updates, then commit.
+
+### Delivery guarantees, idempotency, and transaction boundaries
+The pipeline is **at-least-once**, not exactly-once. Offsets are committed only after the effect is durable, so a crash between effect and commit redelivers the message. Exactly-once would require one atomic transaction spanning the broker, PostgreSQL, and Redis; none exists here (a Kafka transaction cannot include a database commit, and a database commit cannot include a broker offset), so duplicates are made harmless instead of being claimed impossible:
+
+| Step | Transaction | If the process dies afterwards |
+| --- | --- | --- |
+| Ingress | receipt insert (unique ingress key) -> broker ack -> guarded `published` | sender retries; the unique key returns the original signal or finishes a `publish_failed` one |
+| Raw handler | publish normalized -> guarded `normalized` -> commit | redelivery republishes an identical normalized record; receipt state absorbs it |
+| Normalized handler | `ingest_event` (one transaction: incident, event, timeline, keyed by idempotency key) -> receipt `processed` -> commit | redelivery replays into the same Module 1 result via the idempotency key |
+
+Deduplication priority: trusted provider event ID, then source idempotency key, then a normalized fingerprint (`fp:` over workspace, service, source, type, error signature, and title) suppressed inside a sliding `OBS_DEDUP_WINDOW_SECONDS`. Identical raw bytes without any ID collapse within the same window bucket at ingress.
+
+### Retry and dead-letter flow
+```mermaid
+flowchart TD
+    M[Message consumed] --> V{Valid schema, version,\ntenant relationship?}
+    V -- no --> T[Terminal: dead-letter immediately]
+    V -- yes --> P[Process]
+    P -- success --> C[Commit offset]
+    P -- retryable failure\nbroker, DB, throttling --> B{Attempts < max\nand age < max age?}
+    B -- yes --> W[Exponential backoff + jitter] --> P
+    B -- no --> X[Dead-letter: retries_exhausted]
+    T --> D[Persist DeadLetterSignal sanitized + bounded\npublish dead-letter topic\nreceipt = dead_lettered, source = failing]
+    X --> D
+    D --> C
+    D -- dead-lettering itself fails --> U[Leave uncommitted; redelivered, never dropped]
+    C --> R[Manual replay endpoint]
+    R --> Q[Republish sanitized payload once,\nreplay_of header, audit row]
+    Q --> M
+```
+Retries are bounded by attempts and message age, so there is no infinite loop; the only unbounded wait is when the failure store itself is down, where the message intentionally stays uncommitted. Dead letters keep a redacted payload up to 64 KiB (larger ones are kept without payload and are not replayable). Replay publishes once; later requests return `already_replayed` and each request writes an audit row. A replayed message that is still invalid is dead-lettered again rather than looping.
+
+### CloudWatch evidence query
+```mermaid
+sequenceDiagram
+    participant G as Investigation graph
+    participant T as Observability tool
+    participant PG as PostgreSQL
+    participant P as Provider (CloudWatch or fixture)
+    G->>T: query_service_logs / get_service_metrics / compare_metric_windows / get_alarm_context
+    T->>PG: scope from trusted context: workspace, incident, service, source
+    alt no source
+        T-->>G: explicit "no observability source" observation
+    else source configured
+        T->>T: validate terms, clamp window and limits to the source configuration
+        T->>P: bounded read-only call (allow-listed groups, namespaces, alarms)
+        alt throttled / auth / unavailable
+            P-->>T: classified error
+            T->>PG: audit row (status, failure code, no results)
+            T-->>G: unavailable observation (reason, retryable)
+        else ok
+            P-->>T: logs / datapoints / alarm
+            T->>PG: audit row (counts and latency only)
+            T-->>G: redacted EvidenceItems with citation labels
+        end
+    end
+```
+The CloudWatch adapter is read-only and bounded: it can call only `sts:AssumeRole` (temporary credentials from the configured role and an environment-variable external-ID reference), `logs:FilterLogEvents`, `cloudwatch:GetMetricStatistics`, `cloudwatch:DescribeAlarms`, and `cloudwatch:DescribeAlarmHistory`. Log groups, namespaces, and alarm names come only from the stored source configuration; tool inputs cannot select accounts, roles, regions, or groups. No access key is stored or returned.
+
+### Backpressure and recovery
+```mermaid
+stateDiagram-v2
+    [*] --> Accepting
+    Accepting --> RateLimited: per-source or per-workspace rate exceeded (HTTP 429)
+    Accepting --> Unavailable: broker down, rate state unavailable,\nconsumer lag over threshold, or dead-letter burst (HTTP 503)
+    RateLimited --> Accepting: next window under the limit
+    Unavailable --> Accepting: condition clears (health, lag, dead-letter window)
+    RateLimited --> Unavailable: downstream also unhealthy
+    note right of Accepting
+        started/cleared transitions are published once
+        (observability.backpressure_started / _cleared)
+    end note
+```
+Nothing is buffered in memory: a signal is either durably accepted (202), rejected as a duplicate (200), or refused with an honest 429/503 and `Retry-After`. Rate-limit state is held in Redis and fails closed (503) if Redis is unavailable.
+
+### LangGraph observability tools
+`query_service_logs`, `get_service_metrics`, `compare_metric_windows`, and `get_alarm_context` are read-only and bounded. Workspace, incident, service, and source scope comes from the trusted investigation context; results are redacted, size-limited, audited without result contents, and returned as `observability_log`, `observability_metric`, `observability_alarm`, and `normalized_signal` evidence with stable citation labels. Provider failures produce explicit unavailable observations, and investigations without a source are unchanged. Returned text is untrusted evidence and shows correlation, not proven causation.
