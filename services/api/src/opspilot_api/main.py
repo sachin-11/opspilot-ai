@@ -18,6 +18,7 @@ from opspilot_api.infrastructure import (
     create_session_factory,
 )
 from opspilot_api.investigations.router import router as investigations_router
+from opspilot_api.knowledge.router import router as knowledge_router
 from opspilot_api.logging_config import configure_logging
 from opspilot_api.middleware import (
     CORRELATION_HEADER,
@@ -68,4 +69,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(v1.router)
     app.include_router(incidents_router)
     app.include_router(investigations_router)
+    app.include_router(knowledge_router)
     return app

@@ -29,6 +29,8 @@ class ToolRequest(BaseModel):
         "search_ingested_events",
         "summarize_event_frequency",
         "compare_incident_windows",
+        "search_runbooks",
+        "get_knowledge_chunk",
     ]
     arguments: dict[str, Any] = Field(default_factory=dict)
 

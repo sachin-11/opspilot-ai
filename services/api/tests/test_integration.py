@@ -8,18 +8,23 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from redis import Redis
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.orm import Session
 
 from opspilot_api.config import get_settings
 from opspilot_api.incidents.schemas import RealtimeEnvelope
 from opspilot_api.incidents.service import utcnow
 from opspilot_api.investigations.workflow import WorkflowLimitReached, run_workflow
+from opspilot_api.knowledge.ingestion import run_ingestion
+from opspilot_api.knowledge.models import KnowledgeDocumentVersion
+from opspilot_api.knowledge.storage import LocalStorage, StorageError
 from opspilot_api.main import create_app
 from opspilot_api.worker.jobs import resume_investigation
 
@@ -30,6 +35,14 @@ pytestmark = pytest.mark.integration
 def live_client() -> Iterator[TestClient]:
     get_settings.cache_clear()
     with TestClient(create_app(get_settings())) as client:
+        yield client
+
+
+@pytest.fixture
+def knowledge_client(tmp_path: Path) -> Iterator[TestClient]:
+    get_settings.cache_clear()
+    settings = get_settings().model_copy(update={"KNOWLEDGE_STORAGE_ROOT": str(tmp_path)})
+    with TestClient(create_app(settings)) as client:
         yield client
 
 
@@ -476,6 +489,220 @@ def test_investigation_circuit_breakers_fail_safely(
     assert detail["status"] == "failed"
     assert detail["failure_code"] == "limit_reached"
     assert expected_message in detail["failure_message"]
+
+
+def test_knowledge_ingestion_search_versioning_archive_and_isolation(
+    knowledge_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("opspilot_api.knowledge.router.enqueue_ingestion", lambda *args: None)
+    first_workspace = create_workspace(knowledge_client, "Knowledge First")
+    second_workspace = create_workspace(knowledge_client, "Knowledge Second")
+    first_id, second_id = str(first_workspace["id"]), str(second_workspace["id"])
+    service = create_service(knowledge_client, first_id, "knowledge-checkout")
+    payload = {
+        "title": "Checkout database failures",
+        "slug": "checkout-database-failures",
+        "description": "Recovery instructions",
+        "document_type": "runbook",
+        "service_id": service["id"],
+        "tags": ["checkout", "database"],
+        "mime_type": "text/markdown",
+        "filename": "checkout.md",
+        "content": (
+            "# Checkout\n\n## Database Connections\n\n"
+            "If checkout reports UNIQUEOLDTERM connection exhaustion, inspect the pool. "
+            "Authorization: Bearer secret-token must never be retained."
+        ),
+    }
+    created = knowledge_client.post(
+        f"/api/v1/workspaces/{first_id}/knowledge/documents", json=payload
+    )
+    assert created.status_code == 202, created.text
+    ids = created.json()
+    settings = cast(Any, knowledge_client.app).state.settings
+    run_ingestion(settings, UUID(first_id), UUID(ids["job_id"]))
+    detail_path = f"/api/v1/workspaces/{first_id}/knowledge/documents/{ids['document_id']}"
+    ready = knowledge_client.get(detail_path)
+    assert ready.status_code == 200
+    listed = knowledge_client.get(f"/api/v1/workspaces/{first_id}/knowledge/documents")
+    assert listed.status_code == 200, listed.text
+    assert [item["id"] for item in listed.json()] == [ids["document_id"]]
+    assert listed.json()[0]["chunk_count"] >= 1
+    first_detail = ready.json()
+    assert first_detail["status"] == "ready"
+    assert first_detail["current_version_number"] == 1
+    assert first_detail["chunks"]
+    assert "secret-token" not in first_detail["chunks"][0]["content"]
+    assert first_detail["chunks"][0]["heading_path"] == [
+        "Checkout",
+        "Database Connections",
+    ]
+
+    for variant in ("lexical", "vector", "hybrid_rrf", "hybrid_rrf_rerank"):
+        response = knowledge_client.post(
+            f"/api/v1/workspaces/{first_id}/knowledge/search",
+            json={
+                "query": "checkout database connection exhaustion",
+                "service_id": service["id"],
+                "document_types": ["runbook"],
+                "variant": variant,
+                "candidate_count": 10,
+                "top_k": 3,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["results"], variant
+        assert body["results"][0]["citation_label"].startswith(
+            "[Runbook: Checkout database failures"
+        )
+    isolated = knowledge_client.post(
+        f"/api/v1/workspaces/{second_id}/knowledge/search",
+        json={
+            "query": "UNIQUEOLDTERM connection exhaustion",
+            "variant": "hybrid_rrf",
+            "candidate_count": 10,
+            "top_k": 3,
+        },
+    )
+    assert isolated.status_code == 200
+    assert isolated.json()["results"] == []
+
+    version = knowledge_client.post(
+        f"{detail_path}/versions",
+        json={
+            "mime_type": "text/plain",
+            "filename": "checkout-v2.txt",
+            "content": (
+                "Checkout database recovery now uses UNIQUENEWTERM. Drain traffic, "
+                "reset the connection pool, and verify successful requests."
+            ),
+        },
+    )
+    assert version.status_code == 202, version.text
+    run_ingestion(settings, UUID(first_id), UUID(version.json()["job_id"]))
+    second_detail = knowledge_client.get(detail_path).json()
+    assert second_detail["current_version_number"] == 2
+    experimental = knowledge_client.post(
+        f"/api/v1/workspaces/{first_id}/knowledge/search",
+        json={"query": "UNIQUENEWTERM", "variant": "hybrid_rrf_hyde", "top_k": 3},
+    )
+    assert experimental.status_code == 422, experimental.text
+    stale = knowledge_client.post(
+        f"/api/v1/workspaces/{first_id}/knowledge/search",
+        json={
+            "query": "UNIQUEOLDTERM",
+            "variant": "lexical",
+            "candidate_count": 10,
+            "top_k": 3,
+        },
+    )
+    assert stale.json()["results"] == []
+    current = knowledge_client.post(
+        f"/api/v1/workspaces/{first_id}/knowledge/search",
+        json={
+            "query": "UNIQUENEWTERM",
+            "variant": "lexical",
+            "candidate_count": 10,
+            "top_k": 3,
+        },
+    )
+    assert current.json()["results"]
+
+    archived = knowledge_client.post(f"{detail_path}/archive")
+    assert archived.status_code == 200
+    excluded = knowledge_client.post(
+        f"/api/v1/workspaces/{first_id}/knowledge/search",
+        json={
+            "query": "UNIQUENEWTERM",
+            "variant": "lexical",
+            "candidate_count": 10,
+            "top_k": 3,
+        },
+    )
+    assert excluded.json()["results"] == []
+
+
+def test_knowledge_validation_cancellation_and_failed_version_safety(
+    knowledge_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("opspilot_api.knowledge.router.enqueue_ingestion", lambda *args: None)
+    workspace_id = str(create_workspace(knowledge_client, "Knowledge Safety")["id"])
+    other_id = str(create_workspace(knowledge_client, "Other Service Owner")["id"])
+    foreign_service = create_service(knowledge_client, other_id, "foreign-service")
+    base_payload = {
+        "title": "Queue recovery",
+        "slug": "queue-recovery",
+        "document_type": "runbook",
+        "mime_type": "text/plain",
+        "filename": "queue.txt",
+        "content": "Queue recovery procedure with enough meaningful operational content.",
+    }
+    foreign = knowledge_client.post(
+        f"/api/v1/workspaces/{workspace_id}/knowledge/documents",
+        json={**base_payload, "service_id": foreign_service["id"]},
+    )
+    assert foreign.status_code == 404
+    created = knowledge_client.post(
+        f"/api/v1/workspaces/{workspace_id}/knowledge/documents", json=base_payload
+    )
+    assert created.status_code == 202
+    duplicate = knowledge_client.post(
+        f"/api/v1/workspaces/{workspace_id}/knowledge/documents", json=base_payload
+    )
+    assert duplicate.status_code == 409
+    settings = cast(Any, knowledge_client.app).state.settings
+    run_ingestion(settings, UUID(workspace_id), UUID(created.json()["job_id"]))
+    run_ingestion(settings, UUID(workspace_id), UUID(created.json()["job_id"]))
+    detail_path = (
+        f"/api/v1/workspaces/{workspace_id}/knowledge/documents/{created.json()['document_id']}"
+    )
+    ready = knowledge_client.get(detail_path).json()
+    original_version = ready["current_version_id"]
+    original_chunks = ready["chunk_count"]
+
+    cancelled = knowledge_client.post(
+        f"{detail_path}/versions",
+        json={
+            "mime_type": "text/plain",
+            "content": "A queued version that will be cancelled before processing begins.",
+        },
+    )
+    cancelled_job = cancelled.json()["job_id"]
+    cancel_response = knowledge_client.post(
+        f"/api/v1/workspaces/{workspace_id}/knowledge/jobs/{cancelled_job}/cancel"
+    )
+    assert cancel_response.status_code == 200
+    run_ingestion(settings, UUID(workspace_id), UUID(cancelled_job))
+    assert knowledge_client.get(detail_path).json()["current_version_id"] == original_version
+
+    failing = knowledge_client.post(
+        f"{detail_path}/versions",
+        json={
+            "mime_type": "text/plain",
+            "content": "This valid version will lose its private object before extraction.",
+        },
+    )
+    failing_ids = failing.json()
+    engine = create_engine(settings.database_url)
+    with Session(engine) as session:
+        row = session.scalar(
+            select(KnowledgeDocumentVersion).where(
+                KnowledgeDocumentVersion.id == UUID(failing_ids["version_id"]),
+                KnowledgeDocumentVersion.workspace_id == UUID(workspace_id),
+            )
+        )
+        assert row and row.storage_key
+        LocalStorage(settings.KNOWLEDGE_STORAGE_ROOT).delete(row.storage_key)
+    engine.dispose()
+    with pytest.raises(StorageError):
+        run_ingestion(settings, UUID(workspace_id), UUID(failing_ids["job_id"]))
+    after_failure = knowledge_client.get(detail_path).json()
+    assert after_failure["current_version_id"] == original_version
+    assert after_failure["chunk_count"] == original_chunks
+    assert after_failure["status"] == "ready"
 
 
 def test_websocket_workspace_isolation_and_pubsub_cleanup(live_client: TestClient) -> None:

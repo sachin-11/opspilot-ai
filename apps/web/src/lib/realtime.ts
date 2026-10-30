@@ -28,4 +28,11 @@ export async function invalidateRealtimeEvent(
       await queryClient.invalidateQueries({queryKey: ["investigation", activeWorkspaceId, investigationId]});
     }
   }
+  if (event.type.startsWith("knowledge.")) {
+    await queryClient.invalidateQueries({queryKey: ["knowledge", activeWorkspaceId]});
+    const documentId = event.data.document_id;
+    if (typeof documentId === "string") {
+      await queryClient.invalidateQueries({queryKey: ["knowledge-document", activeWorkspaceId, documentId]});
+    }
+  }
 }

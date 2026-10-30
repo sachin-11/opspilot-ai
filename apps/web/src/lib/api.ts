@@ -59,6 +59,20 @@ export const investigationDetailSchema = investigationSummarySchema.extend({
   reviews: z.array(z.object({id: z.string().uuid(), action: z.string(), comment: z.string().nullable(), actor_id: z.string().nullable(), created_at: z.string()})),
   report: investigationReportSchema.nullable(),
 });
+export const knowledgeStatusSchema = z.enum(["draft", "processing", "ready", "failed", "archived"]);
+export const documentTypeSchema = z.enum(["runbook", "postmortem", "architecture", "troubleshooting", "policy", "other"]);
+export const knowledgeDocumentSchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), service_id: z.string().uuid().nullable(), title: z.string(), slug: z.string(),
+  description: z.string().nullable(), document_type: documentTypeSchema, status: knowledgeStatusSchema,
+  current_version_id: z.string().uuid().nullable(), tags: z.array(z.string()), created_at: z.string(), updated_at: z.string(), archived_at: z.string().nullable(),
+  service_name: z.string().nullable(), current_version_number: z.number().nullable(), chunk_count: z.number(),
+});
+const knowledgeVersionSchema = z.object({id: z.string().uuid(), version_number: z.number(), original_filename: z.string().nullable(), mime_type: z.string(), content_hash: z.string(), byte_size: z.number(), page_count: z.number().nullable(), embedding_provider: z.string().nullable(), embedding_model: z.string().nullable(), embedding_dimensions: z.number().nullable(), chunk_count: z.number(), status: z.string(), failure_code: z.string().nullable(), failure_message: z.string().nullable(), created_at: z.string(), processed_at: z.string().nullable()});
+export const knowledgeJobSchema = z.object({id: z.string().uuid(), workspace_id: z.string().uuid(), document_id: z.string().uuid(), document_version_id: z.string().uuid(), status: z.enum(["queued", "running", "completed", "failed", "cancelled"]), current_stage: z.string(), attempt: z.number(), chunks_processed: z.number(), total_chunks: z.number().nullable(), started_at: z.string().nullable(), completed_at: z.string().nullable(), failed_at: z.string().nullable(), failure_code: z.string().nullable(), failure_message: z.string().nullable(), created_at: z.string(), updated_at: z.string()});
+export const knowledgeDetailSchema = knowledgeDocumentSchema.extend({versions: z.array(knowledgeVersionSchema), jobs: z.array(knowledgeJobSchema), chunks: z.array(z.object({id: z.string().uuid(), chunk_index: z.number(), content: z.string(), heading_path: z.array(z.string()), page_number: z.number().nullable(), token_count: z.number(), citation_label: z.string()}))});
+const retrievalVariantSchema = z.enum(["lexical", "vector", "hybrid_rrf", "hybrid_rrf_rerank"]);
+export const knowledgeSearchSchema = z.object({results: z.array(z.object({chunk_id: z.string().uuid(), document_id: z.string().uuid(), document_version_id: z.string().uuid(), document_title: z.string(), document_type: documentTypeSchema, service_id: z.string().uuid().nullable(), service_name: z.string().nullable(), heading_path: z.array(z.string()), page_number: z.number().nullable(), excerpt: z.string(), lexical_rank: z.number().nullable(), lexical_score: z.number().nullable(), vector_rank: z.number().nullable(), vector_score: z.number().nullable(), rrf_score: z.number().nullable(), rerank_score: z.number().nullable(), citation_label: z.string()})), diagnostics: z.object({variant: retrievalVariantSchema, candidate_count: z.number(), latency_ms: z.number(), embedding_latency_ms: z.number().nullable(), rerank_latency_ms: z.number().nullable(), rerank_fallback_used: z.boolean(), low_relevance: z.boolean()})});
+const queuedKnowledgeSchema = z.object({document_id: z.string().uuid(), version_id: z.string().uuid(), job_id: z.string().uuid(), status: z.literal("queued")});
 
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type Service = z.infer<typeof serviceSchema>;
@@ -70,6 +84,12 @@ export type TimelineEvent = z.infer<typeof timelineSchema>;
 export type InvestigationSummary = z.infer<typeof investigationSummarySchema>;
 export type InvestigationDetail = z.infer<typeof investigationDetailSchema>;
 export type ReviewAction = "approved" | "revision_requested" | "rejected";
+export type KnowledgeDocument = z.infer<typeof knowledgeDocumentSchema>;
+export type KnowledgeDetail = z.infer<typeof knowledgeDetailSchema>;
+export type KnowledgeJob = z.infer<typeof knowledgeJobSchema>;
+export type KnowledgeSearch = z.infer<typeof knowledgeSearchSchema>;
+export type DocumentType = z.infer<typeof documentTypeSchema>;
+export type RetrievalVariant = z.infer<typeof retrievalVariantSchema>;
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -85,6 +105,16 @@ async function request<T>(baseUrl: string, path: string, schema: z.ZodType<T>, i
     throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
   }
   return schema.parse(body);
+}
+
+async function multipartRequest<T>(baseUrl: string, path: string, schema: z.ZodType<T>, body: FormData): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, {method: "POST", body});
+  const value: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const parsed = z.object({error: z.object({message: z.string()})}).safeParse(value);
+    throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
+  }
+  return schema.parse(value);
 }
 
 export const api = {
@@ -105,4 +135,11 @@ export const api = {
   reviewInvestigation: (baseUrl: string, workspaceId: string, investigationId: string, action: ReviewAction, comment: string | undefined, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/review`, z.object({investigation_id: z.string().uuid(), status: investigationStatusSchema, version: z.number()}), {method: "POST", body: JSON.stringify({action, comment, version})}),
   cancelInvestigation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/cancel`, z.object({investigation_id: z.string().uuid(), status: investigationStatusSchema, version: z.number()}), {method: "POST"}),
   retryInvestigation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/retry`, z.object({investigation_id: z.string().uuid(), status: z.literal("queued")}), {method: "POST"}),
+  knowledgeDocuments: (baseUrl: string, workspaceId: string, query = new URLSearchParams()) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents?${query}`, z.array(knowledgeDocumentSchema)),
+  knowledgeDocument: (baseUrl: string, workspaceId: string, documentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents/${documentId}`, knowledgeDetailSchema),
+  createKnowledgeDocument: (baseUrl: string, workspaceId: string, form: FormData) => multipartRequest(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents`, queuedKnowledgeSchema, form),
+  addKnowledgeVersion: (baseUrl: string, workspaceId: string, documentId: string, form: FormData) => multipartRequest(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents/${documentId}/versions`, queuedKnowledgeSchema, form),
+  reindexKnowledgeDocument: (baseUrl: string, workspaceId: string, documentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents/${documentId}/reindex`, knowledgeJobSchema, {method: "POST"}),
+  archiveKnowledgeDocument: (baseUrl: string, workspaceId: string, documentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents/${documentId}/archive`, z.object({document_id: z.string().uuid(), status: knowledgeStatusSchema}), {method: "POST"}),
+  knowledgeSearch: (baseUrl: string, workspaceId: string, data: {query: string; service_id?: string; document_types: DocumentType[]; variant: RetrievalVariant; top_k: number; candidate_count: number}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/search`, knowledgeSearchSchema, {method: "POST", body: JSON.stringify(data)}),
 };

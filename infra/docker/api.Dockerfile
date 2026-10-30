@@ -14,6 +14,7 @@ FROM python:3.12-slim
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app /app
+RUN mkdir -p /app/data/knowledge && chown -R app:app /app/data
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER app
 EXPOSE 8000

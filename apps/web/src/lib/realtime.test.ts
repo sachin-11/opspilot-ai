@@ -45,4 +45,19 @@ describe("realtime query routing", () => {
       queryKey: ["investigation", workspaceId, "55555555-5555-4555-8555-555555555555"],
     });
   });
+
+  it("refreshes knowledge list and document detail for ingestion events", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await invalidateRealtimeEvent(client, workspaceId, {
+      ...event,
+      type: "knowledge.ingestion_completed",
+      incident_id: null,
+      data: {document_id: "66666666-6666-4666-8666-666666666666"},
+    });
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["knowledge", workspaceId]});
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["knowledge-document", workspaceId, "66666666-6666-4666-8666-666666666666"],
+    });
+  });
 });

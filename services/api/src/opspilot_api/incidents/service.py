@@ -555,7 +555,7 @@ async def ingest_event(
 async def publish_notification(
     redis: Redis,
     workspace_id: UUID,
-    incident_id: UUID,
+    incident_id: UUID | None,
     event_type: str,
     data: dict[str, object] | None = None,
 ) -> None:

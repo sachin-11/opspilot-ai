@@ -86,6 +86,40 @@ class Settings(BaseSettings):
     LANGSMITH_TRACING: bool = False
     LANGSMITH_API_KEY: SecretStr | None = None
 
+    KNOWLEDGE_STORAGE_BACKEND: str = Field(default="local", pattern="^(local|s3)$")
+    KNOWLEDGE_STORAGE_ROOT: str = Field(default="/app/data/knowledge", min_length=1)
+    KNOWLEDGE_MAX_FILE_BYTES: int = Field(default=5_242_880, ge=1024, le=52_428_800)
+    KNOWLEDGE_MAX_PDF_PAGES: int = Field(default=100, ge=1, le=1000)
+    KNOWLEDGE_MAX_EXTRACTED_CHARS: int = Field(default=2_000_000, ge=1000)
+    KNOWLEDGE_EXTRACTION_TIMEOUT_SECONDS: float = Field(default=20, gt=0, le=120)
+    KNOWLEDGE_CHUNK_TARGET_TOKENS: int = Field(default=300, ge=50, le=2000)
+    KNOWLEDGE_CHUNK_OVERLAP_TOKENS: int = Field(default=40, ge=0, le=500)
+    KNOWLEDGE_CHUNK_MIN_TOKENS: int = Field(default=20, ge=1, le=500)
+    KNOWLEDGE_CHUNK_MAX_TOKENS: int = Field(default=500, ge=50, le=3000)
+    EMBEDDING_PROVIDER: str = Field(default="fake", min_length=1, max_length=50)
+    EMBEDDING_MODEL: str = Field(default="hash-bow-v1", min_length=1, max_length=120)
+    EMBEDDING_API_KEY: SecretStr | None = None
+    EMBEDDING_DIMENSIONS: int = Field(default=64, ge=1, le=4096)
+    EMBEDDING_BATCH_SIZE: int = Field(default=32, ge=1, le=256)
+    EMBEDDING_TIMEOUT_SECONDS: float = Field(default=20, gt=0, le=120)
+    EMBEDDING_RETRIES: int = Field(default=2, ge=0, le=5)
+    EMBEDDING_MAX_TOKENS_PER_JOB: int = Field(default=200_000, ge=1000)
+    KNOWLEDGE_MAX_QUERY_LENGTH: int = Field(default=1000, ge=20, le=5000)
+    KNOWLEDGE_MAX_CANDIDATES: int = Field(default=50, ge=5, le=200)
+    KNOWLEDGE_MAX_TOP_K: int = Field(default=20, ge=1, le=50)
+    KNOWLEDGE_MIN_RELEVANCE: float = Field(default=0.01, ge=0, le=1)
+    KNOWLEDGE_MIN_VECTOR_RELEVANCE: float = Field(default=0.30, ge=-1, le=1)
+    KNOWLEDGE_MIN_RERANK_RELEVANCE: float = Field(default=0.10, ge=0, le=1)
+    RERANK_PROVIDER: str = Field(default="fake", min_length=1, max_length=50)
+    RERANK_MODEL: str = Field(default="token-overlap-v1", min_length=1, max_length=120)
+    RERANK_API_KEY: SecretStr | None = None
+    RERANK_TIMEOUT_SECONDS: float = Field(default=10, gt=0, le=60)
+    RERANK_CANDIDATE_LIMIT: int = Field(default=20, ge=1, le=100)
+    KNOWLEDGE_EXPERIMENTAL_QUERY_ENHANCEMENT: bool = False
+    KNOWLEDGE_ENHANCEMENT_TIMEOUT_SECONDS: float = Field(default=10, gt=0, le=60)
+    KNOWLEDGE_ENHANCEMENT_MAX_OUTPUT_TOKENS: int = Field(default=300, ge=20, le=2000)
+    KNOWLEDGE_ENHANCEMENT_MAX_COST_USD: float = Field(default=0.01, ge=0, le=1)
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -130,6 +164,24 @@ class Settings(BaseSettings):
             )
         if self.AI_FALLBACK_PROVIDER not in {None, "fake"} and self.AI_FALLBACK_API_KEY is None:
             raise ValueError("AI_FALLBACK_API_KEY is required for a non-fake fallback")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_knowledge_configuration(self) -> Self:
+        if self.EMBEDDING_DIMENSIONS != 64:
+            raise ValueError(
+                "EMBEDDING_DIMENSIONS must be 64 for schema version 0004; change it via migration"
+            )
+        if self.KNOWLEDGE_CHUNK_OVERLAP_TOKENS >= self.KNOWLEDGE_CHUNK_TARGET_TOKENS:
+            raise ValueError("chunk overlap must be smaller than target size")
+        if self.KNOWLEDGE_CHUNK_MIN_TOKENS > self.KNOWLEDGE_CHUNK_TARGET_TOKENS:
+            raise ValueError("chunk minimum must not exceed target size")
+        if self.KNOWLEDGE_CHUNK_TARGET_TOKENS > self.KNOWLEDGE_CHUNK_MAX_TOKENS:
+            raise ValueError("chunk target must not exceed maximum size")
+        if self.EMBEDDING_PROVIDER != "fake" and self.EMBEDDING_API_KEY is None:
+            raise ValueError("EMBEDDING_API_KEY is required for non-fake embedding providers")
+        if self.RERANK_PROVIDER != "fake" and self.RERANK_API_KEY is None:
+            raise ValueError("RERANK_API_KEY is required for non-fake rerank providers")
         return self
 
     @property

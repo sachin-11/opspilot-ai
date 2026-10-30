@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from opspilot_api.config import get_settings
 from opspilot_api.investigations.models import Investigation, InvestigationReview
 from opspilot_api.investigations.workflow import run_workflow
+from opspilot_api.knowledge.ingestion import run_ingestion
 
 logger = logging.getLogger(__name__)
 
@@ -72,3 +73,10 @@ def resume_investigation(workspace_id: str, investigation_id: str, review_id: st
     finally:
         engine.dispose()
     run_workflow(settings, workspace_uuid, investigation_uuid, resume=payload)
+
+
+def run_knowledge_ingestion(workspace_id: str, job_id: str) -> None:
+    """Run or safely retry one workspace-scoped knowledge ingestion job."""
+    from uuid import UUID
+
+    run_ingestion(get_settings(), UUID(workspace_id), UUID(job_id))

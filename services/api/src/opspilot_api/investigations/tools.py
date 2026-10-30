@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -10,18 +11,23 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from opspilot_api.config import Settings
 from opspilot_api.incidents.models import Incident, IncidentEvent, IngestedEvent, MonitoredService
 from opspilot_api.investigations.safety import redact_text, redact_value
 
 MAX_RESULTS = 100
 MAX_WINDOW_DAYS = 30
+logger = logging.getLogger(__name__)
 
 
 class ToolContext(BaseModel):
     workspace_id: UUID
     incident_id: UUID
+    investigation_id: UUID
+    settings: Settings
 
 
 class TimeRangeInput(BaseModel):
@@ -48,6 +54,19 @@ class SearchEventsInput(TimeRangeInput):
 class CompareWindowsInput(BaseModel):
     split_at: datetime | None = None
     window_minutes: int = Field(default=60, ge=5, le=1440)
+
+
+class SearchRunbooksInput(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    service_id: UUID | None = None
+    document_types: list[
+        Literal["runbook", "postmortem", "architecture", "troubleshooting", "policy", "other"]
+    ] = Field(default_factory=list, max_length=6)
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class GetKnowledgeChunkInput(BaseModel):
+    chunk_id: UUID
 
 
 class EvidenceDraft(BaseModel):
@@ -321,6 +340,104 @@ def compare_incident_windows(
     )
 
 
+def search_runbooks(session: Session, context: ToolContext, raw: dict[str, Any]) -> ToolResult:
+    incident = _incident(session, context)
+    params = SearchRunbooksInput.model_validate(raw)
+    if params.service_id is not None and params.service_id != incident.service_id:
+        raise ValueError("runbook service filter must match the incident service")
+    from opspilot_api.knowledge.embeddings import EmbeddingError
+    from opspilot_api.knowledge.models import DocumentType
+    from opspilot_api.knowledge.retrieval import RetrievalService
+    from opspilot_api.knowledge.schemas import RetrievalVariant, SearchRequest
+
+    try:
+        response = RetrievalService(context.settings).search(
+            session,
+            context.workspace_id,
+            SearchRequest(
+                query=params.query,
+                service_id=params.service_id or incident.service_id,
+                document_types=[DocumentType(value) for value in params.document_types],
+                variant=RetrievalVariant.HYBRID_RRF,
+                candidate_count=max(5, params.top_k * 4),
+                top_k=params.top_k,
+            ),
+            context.investigation_id,
+        )
+    except (EmbeddingError, SQLAlchemyError) as exc:
+        session.rollback()
+        logger.warning("runbook retrieval unavailable", extra={"error_class": type(exc).__name__})
+        return ToolResult(
+            tool_name="search_runbooks",
+            summary="Runbook retrieval was unavailable; the investigation can continue.",
+            evidence=[],
+            data={"results": [], "low_relevance": True, "temporarily_unavailable": True},
+        )
+    evidence = [
+        EvidenceDraft(
+            evidence_type="runbook",
+            source_type="knowledge_chunk",
+            source_id=str(item.chunk_id),
+            title=item.citation_label,
+            excerpt=redact_text(item.excerpt),
+            metadata={
+                "citation_label": item.citation_label,
+                "document_id": str(item.document_id),
+                "document_version_id": str(item.document_version_id),
+                "rrf_score": item.rrf_score,
+            },
+            collected_at=datetime.now(UTC),
+        )
+        for item in response.results
+    ]
+    return ToolResult(
+        tool_name="search_runbooks",
+        summary=(
+            f"Found {len(evidence)} relevant runbook chunks."
+            if evidence
+            else "No sufficiently relevant runbook was found."
+        ),
+        evidence=evidence,
+        data={
+            "results": [
+                {
+                    "chunk_id": str(item.chunk_id),
+                    "citation_label": item.citation_label,
+                    "rrf_score": item.rrf_score,
+                }
+                for item in response.results
+            ],
+            "low_relevance": response.diagnostics.low_relevance,
+        },
+    )
+
+
+def get_knowledge_chunk(session: Session, context: ToolContext, raw: dict[str, Any]) -> ToolResult:
+    params = GetKnowledgeChunkInput.model_validate(raw)
+    from opspilot_api.knowledge.retrieval import get_chunk
+
+    chunk, document, citation = get_chunk(session, context.workspace_id, params.chunk_id)
+    evidence = EvidenceDraft(
+        evidence_type="runbook",
+        source_type="knowledge_chunk",
+        source_id=str(chunk.id),
+        title=citation,
+        excerpt=redact_text(chunk.content),
+        metadata={
+            "citation_label": citation,
+            "document_id": str(document.id),
+            "document_version_id": str(chunk.document_version_id),
+        },
+        collected_at=chunk.created_at,
+    )
+    return ToolResult(
+        tool_name="get_knowledge_chunk",
+        summary="Loaded one workspace-scoped knowledge chunk.",
+        evidence=[evidence],
+        data={"chunk_id": str(chunk.id), "citation_label": citation},
+    )
+
+
 ToolFunction = Callable[[Session, ToolContext, dict[str, Any]], ToolResult]
 TOOL_REGISTRY: dict[str, ToolFunction] = {
     "get_incident_context": get_incident_context,
@@ -328,6 +445,8 @@ TOOL_REGISTRY: dict[str, ToolFunction] = {
     "search_ingested_events": search_ingested_events,
     "summarize_event_frequency": summarize_event_frequency,
     "compare_incident_windows": compare_incident_windows,
+    "search_runbooks": search_runbooks,
+    "get_knowledge_chunk": get_knowledge_chunk,
 }
 
 
