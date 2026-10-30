@@ -1,4 +1,4 @@
-# OpsPilot AI - Architecture (Module 1)
+# OpsPilot AI - Architecture (Module 2)
 
 ## Container view
 
@@ -16,7 +16,8 @@ flowchart LR
     user -->|"REST /api/v1 + WebSocket"| api
     api -->|SQLAlchemy async, psycopg| pg
     api -->|redis-py asyncio| redis
-    worker -->|RQ| redis
+    redis -->|RQ jobs| worker
+    worker -->|domain rows + LangGraph checkpoints| pg
 ```
 
 ## Responsibilities
@@ -25,8 +26,8 @@ flowchart LR
 | --- | --- |
 | **web** | Serves the incident dashboard, list, detail, creation, and service settings. TanStack Query owns server state; a reconnecting WebSocket invalidates affected caches. |
 | **api** | Versioned REST/WebSocket API, health endpoints, tenant-scoped incident application services, structured logging, and PostgreSQL/Redis lifecycles. |
-| **worker** | Runs RQ jobs from the `default` queue. Only a `ping` smoke-test job exists. Same image and settings as the API. |
-| **postgres** | System of record for workspaces, services, incidents, append-only timeline events, and ingested events. Alembic is the only schema writer. |
+| **worker** | Runs durable investigation graphs and smoke-test jobs. It owns model/tool execution and recovers stale running investigations at startup. |
+| **postgres** | System of record for incidents, investigation steps/evidence/reviews, reports, and LangGraph checkpoints. Alembic owns application schema; checkpoint setup is explicit. |
 | **pgvector** | PostgreSQL extension enabled by migration `0001`, reserved for later embedding storage. No vector columns exist yet. |
 | **redis** | RQ backend and workspace-isolated incident Pub/Sub channels. Persisted with AOF to a named volume. |
 
@@ -104,9 +105,94 @@ sequenceDiagram
 
 Each socket subscribes only to `opspilot:workspace:{workspace_id}:incidents`. Outgoing payloads are validated by `RealtimeEnvelope`. The server sends `connection.established`, handles application `ping`/`pong`, and unsubscribes/closes its Redis Pub/Sub object in `finally`. The browser reconnects with exponential backoff capped at 30 seconds and marks the connection degraded without blocking REST interaction.
 
-## Future extension points (not implemented in Module 1)
+## Future extension points (not implemented in Module 2)
 
 - Authenticated workspace claims and authorization middleware in front of `/api/v1` and WebSockets.
 - AI-assisted correlation and vector columns using the enabled `pgvector` extension.
 - Additional RQ queues and job modules in `opspilot_api/worker/`.
 - Metrics/tracing exporters alongside the existing correlation IDs.
+
+## Investigation job lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Web
+    participant API
+    participant Redis
+    participant Worker
+    participant PG
+    Web->>API: POST incident/investigations
+    API->>PG: Insert queued investigation
+    API->>Redis: Enqueue stable investigation ID
+    API-->>Web: 202 queued
+    Redis->>Worker: RQ job
+    Worker->>PG: Run graph + persist steps/evidence/checkpoints
+    Worker-->>Web: Workspace WebSocket progress via Redis
+    Worker->>PG: Pause at awaiting_review
+```
+
+API handlers only validate/shape requests and enqueue IDs. A partial unique PostgreSQL index enforces one queued/running/awaiting-review run per incident under concurrency. Job re-delivery uses the stable graph thread ID and unique `(investigation_id, node_name, attempt)` / evidence-hash constraints. A worker restart fails provably abandoned `running` rows after the bounded stale threshold; checkpointed review waits remain resumable.
+
+## LangGraph node flow
+
+```mermaid
+flowchart LR
+    A[Load context] --> B[Triage]
+    B --> C[Plan bounded tools]
+    C --> D[Gather evidence]
+    D --> E[Generate hypotheses]
+    E --> F[Critique / abstain]
+    F --> G[Produce cited report]
+    G --> H{{Human review interrupt}}
+    H -->|approve| I[Complete]
+    H -->|revision feedback| J[Revision node]
+    J --> H
+    H -->|reject| K[Reject]
+```
+
+Graph state contains JSON-serializable IDs, snapshots, structured outputs, feedback, and usage totals only. Sessions, Redis clients, API keys, and provider objects live in worker runtime dependencies. `PostgresSaver.setup()` is run explicitly and every invocation uses `graph_thread_id`; a checkpoint is consulted before creating initial state.
+
+## Human review and resume
+
+```mermaid
+sequenceDiagram
+    participant Graph
+    participant PG
+    participant Reviewer
+    participant API
+    participant RQ
+    Graph->>PG: Checkpoint + awaiting_review
+    Reviewer->>API: approve / revise / reject + version
+    API->>PG: Optimistic update + append-only review
+    API->>RQ: Enqueue review ID
+    RQ->>PG: Load scoped review and checkpoint
+    RQ->>Graph: Command(resume=review payload)
+    alt revision
+        Graph->>Graph: Dedicated revision node (no full recollection)
+    else approval or rejection
+        Graph->>PG: Terminal status + incident timeline event
+    end
+```
+
+## Model routing and circuit breakers
+
+```mermaid
+flowchart TD
+    A[Validated structured request] --> B[Primary provider]
+    B -->|valid output| C[Record usage/cost]
+    B -->|retryable failure| D[Bounded exponential retry + jitter]
+    D -->|exhausted and fallback configured| E[Fallback provider]
+    B -->|auth/config/programming/validation/spend error| F[Fail safely; no fallback]
+    E -->|valid output| C
+    C --> G{Runtime/calls/tokens/cost within limits?}
+    G -->|yes| H[Continue graph]
+    G -->|no| F
+```
+
+Input/output prices are configuration, not model-name assumptions. Limits are checked before additional work and after usage is recorded. Limit failures are sanitized, durable, and published without prompts or raw logs.
+
+## Evidence and reasoning boundary
+
+Every internal tool validates typed, bounded inputs and repeats workspace/incident predicates internally. Tools are read-only and have no shell, filesystem, arbitrary SQL, or unrestricted network capability. Results are redacted before model use and persistence, truncated to configured bounds, and deduplicated by a stable SHA-256 content hash. Hypotheses and report claims are rejected if they cite IDs not present in that investigation.
+
+Hidden reasoning is intentionally absent from graph state, database rows, API schemas, logs, WebSocket messages, and UI. Persisting it would enlarge the sensitive-data surface without improving reviewability. Human review instead receives inspectable evidence, structured hypotheses, citations, confidence, assumptions, concise step summaries, and the advisory plan.

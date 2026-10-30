@@ -31,4 +31,18 @@ describe("realtime query routing", () => {
     expect(reconnectDelay(4)).toBe(16_000);
     expect(reconnectDelay(20)).toBe(30_000);
   });
+
+  it("invalidates investigation list and detail for progress events", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await invalidateRealtimeEvent(client, workspaceId, {
+      ...event,
+      type: "investigation.step_completed",
+      data: {investigation_id: "55555555-5555-4555-8555-555555555555"},
+    });
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["investigations", workspaceId]});
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["investigation", workspaceId, "55555555-5555-4555-8555-555555555555"],
+    });
+  });
 });

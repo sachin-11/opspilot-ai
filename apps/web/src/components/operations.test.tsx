@@ -70,13 +70,14 @@ describe("Module 1 operations UI", () => {
     const timeline = [{id: "44444444-4444-4444-8444-444444444444", workspace_id: incident.workspace_id, incident_id: incident.id, event_type: "incident_created", actor_type: "user", actor_id: null, summary: "Incident created", metadata: {}, occurred_at: incident.opened_at, created_at: incident.created_at}];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PATCH") return response({error: {message: "incident version is stale"}}, 409);
+      if (String(input).includes("/investigations")) return response([]);
       return String(input).endsWith("/timeline") ? response(timeline) : response(incident);
     }));
     render(<IncidentDetail incidentId={incident.id} />, {wrapper});
     expect(await screen.findByRole("heading", {name: "Checkout errors"})).toBeInTheDocument();
     expect(await screen.findByText("Incident created")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", {name: "investigating"}));
-    expect(await screen.findByRole("alert")).toHaveTextContent("changed elsewhere");
+    expect(await screen.findByText(/changed elsewhere/)).toBeInTheDocument();
   });
 
   it("creates a monitored service and refreshes the list", async () => {

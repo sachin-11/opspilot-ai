@@ -19,7 +19,9 @@ from sqlalchemy import create_engine, text
 from opspilot_api.config import get_settings
 from opspilot_api.incidents.schemas import RealtimeEnvelope
 from opspilot_api.incidents.service import utcnow
+from opspilot_api.investigations.workflow import WorkflowLimitReached, run_workflow
 from opspilot_api.main import create_app
+from opspilot_api.worker.jobs import resume_investigation
 
 pytestmark = pytest.mark.integration
 
@@ -274,6 +276,206 @@ def test_cross_workspace_incident_returns_404(live_client: TestClient) -> None:
         live_client.get(f"/api/v1/workspaces/{second_id}/incidents/{incident['id']}").status_code
         == 404
     )
+
+
+def test_investigation_checkpoint_review_and_tenant_boundary(
+    live_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "opspilot_api.investigations.router.enqueue_investigation", lambda *args: None
+    )
+    monkeypatch.setattr(
+        "opspilot_api.investigations.router.enqueue_review_resume", lambda *args: None
+    )
+    workspace_id = str(create_workspace(live_client, "Investigation Workspace")["id"])
+    other_workspace_id = str(create_workspace(live_client, "Other Workspace")["id"])
+    incident = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents",
+        json={
+            "title": "Repeated checkout failures",
+            "description": "HTTP 500 errors increased after a deploy",
+            "severity": "sev2",
+        },
+    ).json()
+    collection_path = f"/api/v1/workspaces/{workspace_id}/incidents/{incident['id']}/investigations"
+    created = live_client.post(collection_path, json={"trigger": "manual"})
+    assert created.status_code == 202, created.text
+    investigation_id = created.json()["investigation_id"]
+    assert live_client.post(collection_path, json={"trigger": "manual"}).status_code == 409
+    assert (
+        live_client.get(
+            f"/api/v1/workspaces/{other_workspace_id}/investigations/{investigation_id}"
+        ).status_code
+        == 404
+    )
+
+    settings = get_settings()
+    run_workflow(settings, UUID(workspace_id), UUID(investigation_id))
+    detail_path = f"/api/v1/workspaces/{workspace_id}/investigations/{investigation_id}"
+    awaiting = live_client.get(detail_path)
+    assert awaiting.status_code == 200
+    body = awaiting.json()
+    assert body["status"] == "awaiting_review"
+    assert body["report"]["evidence_citations"]
+    assert body["evidence"]
+    assert any(step["node_name"] == "produce_report" for step in body["steps"])
+    step_ids = {step["id"] for step in body["steps"]}
+    evidence_ids = {item["id"] for item in body["evidence"]}
+
+    # Re-delivery uses the stable checkpoint thread and does not duplicate durable records.
+    run_workflow(settings, UUID(workspace_id), UUID(investigation_id))
+    repeated = live_client.get(detail_path).json()
+    assert {step["id"] for step in repeated["steps"]} == step_ids
+    assert {item["id"] for item in repeated["evidence"]} == evidence_ids
+
+    approved = live_client.post(
+        f"{detail_path}/review",
+        json={"action": "approved", "version": repeated["version"]},
+    )
+    assert approved.status_code == 202, approved.text
+    review_id = live_client.get(detail_path).json()["reviews"][-1]["id"]
+    resume_investigation(workspace_id, investigation_id, review_id)
+    completed = live_client.get(detail_path).json()
+    assert completed["status"] == "completed"
+    assert completed["completed_at"] is not None
+    timeline = live_client.get(
+        f"/api/v1/workspaces/{workspace_id}/incidents/{incident['id']}/timeline"
+    ).json()
+    assert timeline[-1]["event_type"] == "investigation_completed"
+
+
+def test_investigation_cancel_is_idempotent(
+    live_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "opspilot_api.investigations.router.enqueue_investigation", lambda *args: None
+    )
+    workspace_id = str(create_workspace(live_client, "Cancellation Workspace")["id"])
+    incident = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents",
+        json={"title": "Cancel investigation", "severity": "sev3"},
+    ).json()
+    created = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents/{incident['id']}/investigations",
+        json={"trigger": "manual"},
+    ).json()
+    path = f"/api/v1/workspaces/{workspace_id}/investigations/{created['investigation_id']}/cancel"
+    first = live_client.post(path)
+    second = live_client.post(path)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["status"] == second.json()["status"] == "cancelled"
+
+
+def test_investigation_revision_then_rejection(
+    live_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "opspilot_api.investigations.router.enqueue_investigation", lambda *args: None
+    )
+    monkeypatch.setattr(
+        "opspilot_api.investigations.router.enqueue_review_resume", lambda *args: None
+    )
+    workspace_id = str(create_workspace(live_client, "Revision Workspace")["id"])
+    incident = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents",
+        json={"title": "Revision investigation", "severity": "sev2"},
+    ).json()
+    created = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents/{incident['id']}/investigations",
+        json={"trigger": "manual"},
+    ).json()
+    investigation_id = created["investigation_id"]
+    settings = get_settings()
+    run_workflow(settings, UUID(workspace_id), UUID(investigation_id))
+    detail_path = f"/api/v1/workspaces/{workspace_id}/investigations/{investigation_id}"
+    first = live_client.get(detail_path).json()
+
+    revision = live_client.post(
+        f"{detail_path}/review",
+        json={
+            "action": "revision_requested",
+            "comment": "Clarify the uncertainty and verification steps.",
+            "version": first["version"],
+        },
+    )
+    assert revision.status_code == 202, revision.text
+    revision_detail = live_client.get(detail_path).json()
+    resume_investigation(workspace_id, investigation_id, revision_detail["reviews"][-1]["id"])
+    revised = live_client.get(detail_path).json()
+    assert revised["status"] == "awaiting_review"
+    assert revised["revision_count"] == 1
+    assert any(step["node_name"] == "revision" for step in revised["steps"])
+    stale = live_client.post(
+        f"{detail_path}/review",
+        json={
+            "action": "rejected",
+            "comment": "Reject stale review.",
+            "version": first["version"],
+        },
+    )
+    assert stale.status_code == 409
+
+    rejected = live_client.post(
+        f"{detail_path}/review",
+        json={
+            "action": "rejected",
+            "comment": "Evidence is not sufficient for operational use.",
+            "version": revised["version"],
+        },
+    )
+    assert rejected.status_code == 202, rejected.text
+    rejected_detail = live_client.get(detail_path).json()
+    resume_investigation(workspace_id, investigation_id, rejected_detail["reviews"][-1]["id"])
+    terminal = live_client.get(detail_path).json()
+    assert terminal["status"] == "rejected"
+    assert terminal["report"] is not None
+    assert [review["action"] for review in terminal["reviews"]] == [
+        "revision_requested",
+        "rejected",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_message"),
+    [
+        ({"AI_MAX_TOOL_CALLS": 1}, "maximum tool call limit"),
+        (
+            {
+                "AI_INPUT_PRICE_PER_MILLION": 1000.0,
+                "AI_OUTPUT_PRICE_PER_MILLION": 1000.0,
+                "AI_MAX_COST_USD": 0.001,
+            },
+            "maximum investigation cost",
+        ),
+    ],
+)
+def test_investigation_circuit_breakers_fail_safely(
+    live_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    expected_message: str,
+) -> None:
+    monkeypatch.setattr(
+        "opspilot_api.investigations.router.enqueue_investigation", lambda *args: None
+    )
+    workspace_id = str(create_workspace(live_client, "Limit Workspace")["id"])
+    incident = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents",
+        json={"title": "Bounded investigation", "severity": "sev3"},
+    ).json()
+    investigation_id = live_client.post(
+        f"/api/v1/workspaces/{workspace_id}/incidents/{incident['id']}/investigations",
+        json={"trigger": "manual"},
+    ).json()["investigation_id"]
+    settings = get_settings().model_copy(update=overrides)
+    with pytest.raises(WorkflowLimitReached, match=expected_message):
+        run_workflow(settings, UUID(workspace_id), UUID(investigation_id))
+    detail = live_client.get(
+        f"/api/v1/workspaces/{workspace_id}/investigations/{investigation_id}"
+    ).json()
+    assert detail["status"] == "failed"
+    assert detail["failure_code"] == "limit_reached"
+    assert expected_message in detail["failure_message"]
 
 
 def test_websocket_workspace_isolation_and_pubsub_cleanup(live_client: TestClient) -> None:

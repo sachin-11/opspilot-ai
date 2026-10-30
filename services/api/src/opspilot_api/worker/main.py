@@ -1,5 +1,6 @@
 """RQ worker entrypoint: ``python -m opspilot_api.worker.main``."""
 
+import asyncio
 import logging
 import socket
 from types import TracebackType
@@ -7,8 +8,11 @@ from types import TracebackType
 from redis import Redis
 from rq import Worker
 from rq.job import Job
+from sqlalchemy.exc import SQLAlchemyError
 
 from opspilot_api.config import Settings, get_settings
+from opspilot_api.infrastructure import create_db_engine, create_session_factory
+from opspilot_api.investigations.service import recover_stale_investigations
 from opspilot_api.logging_config import configure_logging
 
 logger = logging.getLogger("opspilot_api.worker")
@@ -43,9 +47,32 @@ def log_job_failure(
     return True
 
 
+async def recover_stale_work(settings: Settings) -> int:
+    """Fail abandoned running investigations before accepting new jobs."""
+    engine = create_db_engine(settings)
+    try:
+        session_factory = create_session_factory(engine)
+        async with session_factory() as session:
+            return await recover_stale_investigations(session, settings)
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.LOG_LEVEL.value)
+    try:
+        recovered = asyncio.run(recover_stale_work(settings))
+    except SQLAlchemyError as exc:
+        # On the first boot Compose starts the worker before Alembic creates the
+        # investigation tables. Recovery is retried on the next worker start.
+        logger.warning(
+            "stale investigation recovery deferred",
+            extra={"error_class": type(exc).__name__},
+        )
+    else:
+        if recovered:
+            logger.warning("stale investigations recovered", extra={"count": recovered})
     connection = create_redis(settings)
     worker = Worker(
         QUEUES,

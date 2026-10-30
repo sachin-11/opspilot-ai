@@ -57,6 +57,8 @@ class EventType(StrEnum):
     SEVERITY_CHANGED = "severity_changed"
     NOTE_ADDED = "note_added"
     INCIDENT_REOPENED = "incident_reopened"
+    INVESTIGATION_COMPLETED = "investigation_completed"
+    INVESTIGATION_REJECTED = "investigation_rejected"
 
 
 class ActorType(StrEnum):

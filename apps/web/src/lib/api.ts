@@ -34,6 +34,31 @@ export const realtimeSchema = z.object({
   incident_id: z.string().uuid().nullable(), occurred_at: z.string(),
   data: z.record(z.string(), z.unknown()),
 });
+export const investigationStatusSchema = z.enum(["queued", "running", "awaiting_review", "completed", "rejected", "failed", "cancelled"]);
+export const investigationSummarySchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), incident_id: z.string().uuid(), retry_of_id: z.string().uuid().nullable(),
+  status: investigationStatusSchema, trigger: z.enum(["manual", "incident_created", "incident_updated"]),
+  prompt_version: z.string(), primary_provider: z.string(), primary_model: z.string(),
+  fallback_provider: z.string().nullable(), fallback_model: z.string().nullable(), title: z.string().nullable(),
+  executive_summary: z.string().nullable(), root_cause: z.string().nullable(), confidence: z.number().nullable(),
+  total_input_tokens: z.number(), total_output_tokens: z.number(), estimated_cost_usd: z.number().nullable(),
+  revision_count: z.number(), version: z.number(), started_at: z.string().nullable(), review_requested_at: z.string().nullable(),
+  completed_at: z.string().nullable(), failed_at: z.string().nullable(), cancelled_at: z.string().nullable(),
+  failure_code: z.string().nullable(), failure_message: z.string().nullable(), created_at: z.string(), updated_at: z.string(),
+});
+const planStepSchema = z.object({order: z.number(), action: z.string(), rationale: z.string(), evidence_ids: z.array(z.string().uuid())});
+export const investigationReportSchema = z.object({
+  title: z.string(), executive_summary: z.string(), root_cause: z.string(), confidence: z.number(), impact: z.string(),
+  evidence_citations: z.array(z.string().uuid()), alternative_hypotheses: z.array(z.string()),
+  immediate_containment_steps: z.array(planStepSchema), remediation_plan: z.array(planStepSchema),
+  verification_plan: z.array(planStepSchema), unknowns_and_assumptions: z.array(z.string()), abstained: z.boolean(),
+});
+export const investigationDetailSchema = investigationSummarySchema.extend({
+  steps: z.array(z.object({id: z.string().uuid(), node_name: z.string(), display_name: z.string(), status: z.string(), attempt: z.number(), summary: z.string().nullable(), structured_output: z.unknown().nullable(), error_code: z.string().nullable(), error_message: z.string().nullable(), input_tokens: z.number(), output_tokens: z.number(), estimated_cost_usd: z.number().nullable(), started_at: z.string(), completed_at: z.string().nullable()})),
+  evidence: z.array(z.object({id: z.string().uuid(), evidence_type: z.string(), source_type: z.string(), source_id: z.string().nullable(), title: z.string(), excerpt: z.string(), metadata: z.record(z.string(), z.unknown()), content_hash: z.string(), collected_at: z.string()})),
+  reviews: z.array(z.object({id: z.string().uuid(), action: z.string(), comment: z.string().nullable(), actor_id: z.string().nullable(), created_at: z.string()})),
+  report: investigationReportSchema.nullable(),
+});
 
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type Service = z.infer<typeof serviceSchema>;
@@ -42,6 +67,9 @@ export type Severity = z.infer<typeof severitySchema>;
 export type IncidentStatus = z.infer<typeof statusSchema>;
 export type Environment = z.infer<typeof environmentSchema>;
 export type TimelineEvent = z.infer<typeof timelineSchema>;
+export type InvestigationSummary = z.infer<typeof investigationSummarySchema>;
+export type InvestigationDetail = z.infer<typeof investigationDetailSchema>;
+export type ReviewAction = "approved" | "revision_requested" | "rejected";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -71,4 +99,10 @@ export const api = {
   status: (baseUrl: string, workspaceId: string, incidentId: string, status: IncidentStatus, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/status`, incidentSchema, {method: "PATCH", body: JSON.stringify({status, version})}),
   severity: (baseUrl: string, workspaceId: string, incidentId: string, severity: Severity, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/severity`, incidentSchema, {method: "PATCH", body: JSON.stringify({severity, version})}),
   note: (baseUrl: string, workspaceId: string, incidentId: string, summary: string, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/notes`, timelineSchema, {method: "POST", body: JSON.stringify({summary, version})}),
+  investigations: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/investigations`, z.array(investigationSummarySchema)),
+  investigation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}`, investigationDetailSchema),
+  startInvestigation: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/investigations`, z.object({investigation_id: z.string().uuid(), status: z.literal("queued")}), {method: "POST", body: JSON.stringify({trigger: "manual"})}),
+  reviewInvestigation: (baseUrl: string, workspaceId: string, investigationId: string, action: ReviewAction, comment: string | undefined, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/review`, z.object({investigation_id: z.string().uuid(), status: investigationStatusSchema, version: z.number()}), {method: "POST", body: JSON.stringify({action, comment, version})}),
+  cancelInvestigation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/cancel`, z.object({investigation_id: z.string().uuid(), status: investigationStatusSchema, version: z.number()}), {method: "POST"}),
+  retryInvestigation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/retry`, z.object({investigation_id: z.string().uuid(), status: z.literal("queued")}), {method: "POST"}),
 };

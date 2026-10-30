@@ -12,6 +12,9 @@ if ($Down) {
 Import-DotEnv
 Invoke-Step 'Build and start services (waits for health checks)' { docker compose up -d --build --wait }
 Invoke-Step 'Apply database migrations' { docker compose exec api alembic upgrade head }
+Invoke-Step 'Set up LangGraph PostgreSQL checkpoints' {
+    docker compose exec api python -m opspilot_api.investigations.checkpoint_setup
+}
 
 Write-Host "`nWeb:        http://localhost:$($env:WEB_HOST_PORT)"
 Write-Host "API docs:   http://localhost:$($env:API_HOST_PORT)/docs"

@@ -62,6 +62,30 @@ class Settings(BaseSettings):
 
     DEPENDENCY_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
 
+    AI_PRIMARY_PROVIDER: str = Field(default="fake", min_length=1, max_length=50)
+    AI_PRIMARY_MODEL: str = Field(default="deterministic-v1", min_length=1, max_length=120)
+    AI_PRIMARY_API_KEY: SecretStr | None = None
+    AI_FALLBACK_PROVIDER: str | None = Field(default=None, max_length=50)
+    AI_FALLBACK_MODEL: str | None = Field(default=None, max_length=120)
+    AI_FALLBACK_API_KEY: SecretStr | None = None
+    AI_PROVIDER_TIMEOUT_SECONDS: float = Field(default=30, gt=0, le=120)
+    AI_PROVIDER_RETRIES: int = Field(default=2, ge=0, le=5)
+    AI_MAX_RUNTIME_SECONDS: int = Field(default=300, ge=30, le=1800)
+    AI_MAX_LLM_CALLS: int = Field(default=8, ge=1, le=50)
+    AI_MAX_TOOL_CALLS: int = Field(default=8, ge=1, le=50)
+    AI_MAX_RETRIES_PER_NODE: int = Field(default=1, ge=0, le=3)
+    AI_MAX_EVIDENCE_ITEMS: int = Field(default=50, ge=5, le=200)
+    AI_MAX_TOOL_OUTPUT_BYTES: int = Field(default=65536, ge=1024, le=1048576)
+    AI_MAX_INPUT_TOKENS: int = Field(default=50000, ge=1000)
+    AI_MAX_OUTPUT_TOKENS: int = Field(default=10000, ge=500)
+    AI_MAX_COST_USD: float = Field(default=2.0, gt=0, le=100)
+    AI_MAX_REVISIONS: int = Field(default=2, ge=0, le=5)
+    AI_INPUT_PRICE_PER_MILLION: float | None = Field(default=None, ge=0)
+    AI_OUTPUT_PRICE_PER_MILLION: float | None = Field(default=None, ge=0)
+    AI_AUTO_TRIGGER_ENABLED: bool = False
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_API_KEY: SecretStr | None = None
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -95,6 +119,19 @@ class Settings(BaseSettings):
             raise ValueError("Wildcard CORS origin is only allowed when APP_ENV=development")
         return self
 
+    @model_validator(mode="after")
+    def _validate_ai_provider_configuration(self) -> Self:
+        if self.AI_PRIMARY_PROVIDER != "fake" and self.AI_PRIMARY_API_KEY is None:
+            raise ValueError("AI_PRIMARY_API_KEY is required for non-fake providers")
+        fallback_values = (self.AI_FALLBACK_PROVIDER, self.AI_FALLBACK_MODEL)
+        if any(fallback_values) and not all(fallback_values):
+            raise ValueError(
+                "AI_FALLBACK_PROVIDER and AI_FALLBACK_MODEL must be configured together"
+            )
+        if self.AI_FALLBACK_PROVIDER not in {None, "fake"} and self.AI_FALLBACK_API_KEY is None:
+            raise ValueError("AI_FALLBACK_API_KEY is required for a non-fake fallback")
+        return self
+
     @property
     def database_url(self) -> URL:
         """SQLAlchemy URL (psycopg driver). Render with ``hide_password`` before logging."""
@@ -106,6 +143,10 @@ class Settings(BaseSettings):
             port=self.POSTGRES_PORT,
             database=self.POSTGRES_DB,
         )
+
+    @property
+    def checkpoint_url(self) -> str:
+        return self.database_url.set(drivername="postgresql").render_as_string(hide_password=False)
 
 
 @lru_cache

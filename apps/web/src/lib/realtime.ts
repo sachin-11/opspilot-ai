@@ -21,4 +21,11 @@ export async function invalidateRealtimeEvent(
       queryClient.invalidateQueries({queryKey: ["timeline", activeWorkspaceId, event.incident_id]}),
     ]);
   }
+  if (event.type.startsWith("investigation.")) {
+    await queryClient.invalidateQueries({queryKey: ["investigations", activeWorkspaceId]});
+    const investigationId = event.data.investigation_id;
+    if (typeof investigationId === "string") {
+      await queryClient.invalidateQueries({queryKey: ["investigation", activeWorkspaceId, investigationId]});
+    }
+  }
 }

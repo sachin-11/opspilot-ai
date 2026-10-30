@@ -1,19 +1,19 @@
 # OpsPilot AI
 
-OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 1: the incident-management core**, built on the Module 0 foundation.
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 2: the human-reviewed AI investigation engine**, built on the Module 0/1 foundation.
 
-## Module 1 capabilities
+## Module 2 capabilities
 
-Included: workspaces, monitored services, manual incidents, status/severity transitions, optimistic concurrency, append-only timelines, notes, deterministic event ingestion and deduplication, cursor pagination and filters, Redis Pub/Sub WebSockets, an operational Next.js dashboard, and an idempotent development seed. Module 0 health endpoints, RQ worker, PostgreSQL + pgvector, Docker Compose, tests, and CI remain intact.
+Included: the complete Module 1 incident core plus RQ-executed LangGraph investigations, PostgreSQL checkpoints, typed read-only tools, redacted and deduplicated evidence, structured hypotheses/reports, retryable-only provider fallback, usage/cost circuit breakers, human approval/revision/rejection, stale-worker recovery, real-time progress, and an incident-detail investigation UI.
 
 ### Intentionally deferred to later modules
 
-AI agents, LangGraph/LLM/RAG workflows, fuzzy correlation, GitHub/AWS integrations, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation.
+RAG/runbook embeddings, GitHub/code access, AWS/CloudWatch, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation shown by Module 2 is advisory only; OpsPilot never executes production changes.**
 
 ## Architecture
 
 ```
-Browser -> web (Next.js) ; Browser -> api (FastAPI) -> postgres (pgvector), redis <- worker (RQ)
+Browser -> web (Next.js) ; Browser -> api (FastAPI) -> postgres, redis/RQ -> worker -> LangGraph -> postgres checkpoints
 ```
 
 Details and a Mermaid diagram: [docs/architecture.md](docs/architecture.md).
@@ -50,6 +50,7 @@ cp .env.example .env
 (cd apps/web && corepack pnpm install --frozen-lockfile)
 docker compose up -d --build --wait
 docker compose exec api alembic upgrade head
+docker compose exec api python -m opspilot_api.investigations.checkpoint_setup
 ```
 
 ## Local service URLs
@@ -87,7 +88,7 @@ scripts\migrate.ps1
 Migration `0001` runs `CREATE EXTENSION IF NOT EXISTS vector`. Verify:
 `docker compose exec postgres psql -U opspilot -d opspilot -c "\dx vector"`.
 
-Migration `0002` creates the Module 1 workspace, service, incident, timeline, and ingested-event tables with tenant-scoped constraints and indexes. Validate reversibility on a disposable database with:
+Migration `0002` creates the Module 1 domain. Migration `0003` creates investigations, steps, evidence, and append-only reviews, including a partial unique index allowing only one active investigation per incident. LangGraph's checkpoint tables are initialized explicitly with the checkpoint setup command above. Validate reversibility on a disposable database with:
 
 ```bash
 docker compose exec api alembic downgrade 0001
@@ -103,6 +104,25 @@ docker compose exec api python -m opspilot_api.incidents.seed
 ```
 
 Open http://localhost:3300, create a manual incident, move it through a valid status transition, change severity, and add a timeline note. The UI uses REST as its source of truth and refreshes affected TanStack Query caches from workspace-scoped WebSocket events.
+
+## Investigation lifecycle
+
+Open an incident and choose **Start investigation**. The API persists a queued run and returns 202; RQ runs the graph under the investigation's stable checkpoint thread. It loads context, triages, plans bounded tool calls, gathers sanitized evidence, generates and critiques hypotheses, then drafts a cited report and pauses at `awaiting_review`.
+
+- **Approve** resumes the checkpoint and completes the run.
+- **Request revision** requires feedback and resumes only at the revision node; evidence collection is not repeated. Two revisions are allowed by default.
+- **Reject** requires feedback, preserves the report/history, and closes the run.
+- Cancellation is idempotent. A failed run is never overwritten; retry creates a linked investigation.
+
+WebSocket events invalidate investigation caches. While the socket is degraded, active investigations poll REST; terminal runs stop polling.
+
+## Model configuration and limits
+
+Local and CI mode uses `AI_PRIMARY_PROVIDER=fake` with `AI_PRIMARY_MODEL=deterministic-v1`; it is deterministic and never calls an external model. A primary and optional fallback are selected entirely through `AI_*` environment settings. The current repository ships the fake adapter and provider interface; configure only an adapter implemented in `investigations/providers.py`. Fallback is attempted only for timeout/rate-limit/temporary failures, never for credentials, invalid structured output, unsafe tool calls, isolation failures, or spend limits.
+
+The `.env.example` documents request timeouts/retries and hard limits for runtime, model calls, tool calls, evidence count, tool-output bytes, input/output tokens, configured price rates, total estimated cost, and revisions. Estimated cost is unavailable when usage or rates are unavailable. Crossing a limit stops further model work, persists a safe failure, and publishes `investigation.limit_reached`.
+
+Optional LangSmith tracing is disabled by default. Set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` to enable the LangGraph/LangChain integration; do not attach unredacted evidence or secrets to trace metadata. Missing tracing configuration never blocks an investigation.
 
 ## Event ingestion
 
@@ -123,7 +143,7 @@ Connect to `ws://localhost:8300/api/v1/ws/workspaces/{workspace_id}/incidents`. 
 
 ## Current security boundary
 
-Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated in Module 1. Do not expose this build as a production-secure multi-tenant service; authenticated workspace claims and authorization belong to a later module. Event attributes reject credential-like keys and payloads above 64 KiB.
+Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated. Do not expose this build as a production-secure multi-tenant service. Evidence is bounded and common secret forms are redacted, but this is defense in depth rather than a complete DLP system. Incident/log content remains untrusted. Hidden chain-of-thought and full prompts are neither stored nor returned; only structured outputs, evidence references, concise summaries, and safe errors are persisted.
 
 ## Tests and quality checks
 
