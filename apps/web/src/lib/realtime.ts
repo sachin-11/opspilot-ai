@@ -1,8 +1,12 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { z } from "zod";
-import { realtimeSchema } from "./api";
+import { realtimeSchema, repositoryProgressSchema } from "./api";
 
 export type RealtimeEvent = z.infer<typeof realtimeSchema>;
+
+export function repositoryProgressKey(workspaceId: string, repositoryId: string): QueryKey {
+  return ["repository-progress", workspaceId, repositoryId];
+}
 
 export function reconnectDelay(attempt: number): number {
   return Math.min(30_000, 1000 * 2 ** Math.max(0, attempt));
@@ -27,6 +31,19 @@ export async function invalidateRealtimeEvent(
     if (typeof investigationId === "string") {
       await queryClient.invalidateQueries({queryKey: ["investigation", activeWorkspaceId, investigationId]});
     }
+  }
+  if (event.type.startsWith("repository.")) {
+    const progress = repositoryProgressSchema.safeParse(event.data);
+    const repositoryId = progress.success ? progress.data.repository_id : undefined;
+    if (progress.success && repositoryId && event.type.startsWith("repository.indexing_")) {
+      queryClient.setQueryData(repositoryProgressKey(activeWorkspaceId, repositoryId), {type: event.type, ...progress.data});
+    }
+    const keys: QueryKey[] = [
+      ["repositories", activeWorkspaceId], ["github-installations", activeWorkspaceId],
+      ["service-mappings", activeWorkspaceId], ["suspect-changes", activeWorkspaceId],
+    ];
+    if (repositoryId) keys.push(["repository", activeWorkspaceId, repositoryId], ["repository-activity", activeWorkspaceId, repositoryId]);
+    await Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({queryKey})));
   }
   if (event.type.startsWith("knowledge.")) {
     await queryClient.invalidateQueries({queryKey: ["knowledge", activeWorkspaceId]});

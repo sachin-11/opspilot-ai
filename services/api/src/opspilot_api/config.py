@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     AI_PROVIDER_RETRIES: int = Field(default=2, ge=0, le=5)
     AI_MAX_RUNTIME_SECONDS: int = Field(default=300, ge=30, le=1800)
     AI_MAX_LLM_CALLS: int = Field(default=8, ge=1, le=50)
-    AI_MAX_TOOL_CALLS: int = Field(default=8, ge=1, le=50)
+    AI_MAX_TOOL_CALLS: int = Field(default=14, ge=1, le=50)
     AI_MAX_RETRIES_PER_NODE: int = Field(default=1, ge=0, le=3)
     AI_MAX_EVIDENCE_ITEMS: int = Field(default=50, ge=5, le=200)
     AI_MAX_TOOL_OUTPUT_BYTES: int = Field(default=65536, ge=1024, le=1048576)
@@ -120,11 +120,65 @@ class Settings(BaseSettings):
     KNOWLEDGE_ENHANCEMENT_MAX_OUTPUT_TOKENS: int = Field(default=300, ge=20, le=2000)
     KNOWLEDGE_ENHANCEMENT_MAX_COST_USD: float = Field(default=0.01, ge=0, le=1)
 
+    GITHUB_PROVIDER: str = Field(default="fixture", pattern="^(fixture|github)$")
+    # Demo only: shift fixture timestamps so the planted regression is ~1h before "now".
+    GITHUB_FIXTURE_REBASE_TO_NOW: bool = False
+    GITHUB_APP_ID: int | None = Field(default=None, ge=1)
+    GITHUB_APP_PRIVATE_KEY: SecretStr | None = None
+    GITHUB_APP_PRIVATE_KEY_FILE: str | None = None
+    GITHUB_WEBHOOK_SECRET: SecretStr | None = None
+    GITHUB_API_BASE_URL: str = "https://api.github.com"
+    GITHUB_ALLOWED_INSTALLATION_IDS: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    GITHUB_REQUEST_TIMEOUT_SECONDS: float = Field(default=15, gt=0, le=60)
+    GITHUB_WEBHOOK_MAX_BYTES: int = Field(default=1_048_576, ge=1024, le=10_485_760)
+    REPO_MAX_FILES: int = Field(default=2000, ge=1, le=50_000)
+    REPO_MAX_FILE_BYTES: int = Field(default=262_144, ge=1024, le=2_097_152)
+    REPO_MAX_TOTAL_BYTES: int = Field(default=20_971_520, ge=1024, le=524_288_000)
+    REPO_MAX_CHUNKS: int = Field(default=5000, ge=1, le=100_000)
+    REPO_INDEX_TIMEOUT_SECONDS: float = Field(default=300, gt=0, le=3600)
+    REPO_CHUNK_MAX_LINES: int = Field(default=80, ge=10, le=500)
+    REPO_CHUNK_OVERLAP_LINES: int = Field(default=5, ge=0, le=50)
+    REPO_MAX_PARSE_FAILURE_RATIO: float = Field(default=0.5, ge=0, le=1)
+    REPO_MAX_COMMITS_PER_SYNC: int = Field(default=100, ge=1, le=500)
+    REPO_MAX_PATCH_EXCERPT_CHARS: int = Field(default=4000, ge=200, le=20_000)
+    REPO_RATE_LIMIT_MAX_RETRIES: int = Field(default=3, ge=0, le=10)
+    REPO_CORRELATION_LOOKBACK_HOURS: int = Field(default=72, ge=1, le=720)
+    REPO_MIN_VECTOR_RELEVANCE: float = Field(default=0.3, ge=-1, le=1)
+    # Hybrid results with no lexical match must clear this stricter vector bar.
+    REPO_MIN_HYBRID_VECTOR_RELEVANCE: float = Field(default=0.6, ge=-1, le=1)
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator(
+        "GITHUB_APP_ID",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_APP_PRIVATE_KEY_FILE",
+        "GITHUB_WEBHOOK_SECRET",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # Compose passes unset optional variables as empty strings; an empty webhook secret
+        # must never count as "configured".
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("GITHUB_WEBHOOK_SECRET")
+    @classmethod
+    def _webhook_secret_strength(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 16:
+            raise ValueError("GITHUB_WEBHOOK_SECRET must be at least 16 characters")
+        return value
+
+    @field_validator("GITHUB_ALLOWED_INSTALLATION_IDS", mode="before")
+    @classmethod
+    def _split_installation_ids(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [int(item) for item in value.split(",") if item.strip()]
         return value
 
     @field_validator("CORS_ORIGINS")
@@ -182,6 +236,18 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_API_KEY is required for non-fake embedding providers")
         if self.RERANK_PROVIDER != "fake" and self.RERANK_API_KEY is None:
             raise ValueError("RERANK_API_KEY is required for non-fake rerank providers")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_repository_configuration(self) -> Self:
+        if self.REPO_CHUNK_OVERLAP_LINES >= self.REPO_CHUNK_MAX_LINES:
+            raise ValueError("repository chunk overlap must be smaller than the maximum")
+        if self.GITHUB_PROVIDER == "github":
+            has_key = self.GITHUB_APP_PRIVATE_KEY is not None or self.GITHUB_APP_PRIVATE_KEY_FILE
+            if self.GITHUB_APP_ID is None or not has_key:
+                raise ValueError("GITHUB_APP_ID and a private key are required for GitHub")
+            if self.GITHUB_WEBHOOK_SECRET is None:
+                raise ValueError("GITHUB_WEBHOOK_SECRET is required for GitHub")
         return self
 
     @property

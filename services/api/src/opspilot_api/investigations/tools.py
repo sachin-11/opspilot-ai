@@ -439,6 +439,19 @@ def get_knowledge_chunk(session: Session, context: ToolContext, raw: dict[str, A
 
 
 ToolFunction = Callable[[Session, ToolContext, dict[str, Any]], ToolResult]
+
+
+def _code_tool(name: str) -> ToolFunction:
+    """Late-bound adapter so repository tools can import this module without a cycle."""
+
+    def run(session: Session, context: ToolContext, raw: dict[str, Any]) -> ToolResult:
+        from opspilot_api.repositories.tools import CODE_TOOLS
+
+        return CODE_TOOLS[name](session, context, raw)
+
+    return run
+
+
 TOOL_REGISTRY: dict[str, ToolFunction] = {
     "get_incident_context": get_incident_context,
     "get_incident_timeline": get_incident_timeline,
@@ -447,6 +460,13 @@ TOOL_REGISTRY: dict[str, ToolFunction] = {
     "compare_incident_windows": compare_incident_windows,
     "search_runbooks": search_runbooks,
     "get_knowledge_chunk": get_knowledge_chunk,
+    "list_recent_changes": _code_tool("list_recent_changes"),
+    "rank_suspect_changes": _code_tool("rank_suspect_changes"),
+    "get_commit_summary": _code_tool("get_commit_summary"),
+    "get_commit_diff": _code_tool("get_commit_diff"),
+    "search_repository_code": _code_tool("search_repository_code"),
+    "get_code_excerpt": _code_tool("get_code_excerpt"),
+    "get_pull_request_context": _code_tool("get_pull_request_context"),
 }
 
 

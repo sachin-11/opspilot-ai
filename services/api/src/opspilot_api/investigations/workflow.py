@@ -54,6 +54,7 @@ class InvestigationState(TypedDict, total=False):
     triage: dict[str, Any]
     plan: dict[str, Any]
     evidence_ids: list[str]
+    code_evidence_ids: list[str]
     tool_observations: list[dict[str, Any]]
     hypotheses: dict[str, Any]
     critique: dict[str, Any]
@@ -61,6 +62,15 @@ class InvestigationState(TypedDict, total=False):
     human_feedback: dict[str, Any]
     revision_count: int
     error_state: dict[str, str]
+
+
+CODE_SOURCE_TYPES = (
+    "repository_commit",
+    "deployment",
+    "pull_request",
+    "code_chunk",
+    "commit_diff",
+)
 
 
 class InvestigationCancelled(Exception):
@@ -464,6 +474,17 @@ class WorkflowRuntime:
                             session.flush()
                         evidence_ids.append(str(existing.id))
                 evidence_ids = list(dict.fromkeys(evidence_ids))
+                code_evidence_ids = [
+                    str(item)
+                    for item in session.scalars(
+                        select(EvidenceItem.id).where(
+                            EvidenceItem.investigation_id == investigation.id,
+                            EvidenceItem.workspace_id == investigation.workspace_id,
+                            EvidenceItem.id.in_([UUID(value) for value in evidence_ids]),
+                            EvidenceItem.source_type.in_(CODE_SOURCE_TYPES),
+                        )
+                    )
+                ]
                 output = {
                     "tool_calls": len(plan.tool_requests),
                     "evidence_count": len(evidence_ids),
@@ -475,7 +496,11 @@ class WorkflowRuntime:
                     f"Collected {len(evidence_ids)} deduplicated evidence items.",
                     output,
                 )
-                return {"evidence_ids": evidence_ids, "tool_observations": observations}
+                return {
+                    "evidence_ids": evidence_ids,
+                    "code_evidence_ids": code_evidence_ids,
+                    "tool_observations": observations,
+                }
             except Exception as exc:
                 session.rollback()
                 investigation, step = self._begin_step(
@@ -495,6 +520,7 @@ class WorkflowRuntime:
                 "incident": state["incident_snapshot"],
                 "observations": state["tool_observations"],
                 "evidence_ids": state["evidence_ids"],
+                "code_evidence_ids": state.get("code_evidence_ids", []),
             },
             "hypotheses",
         )
@@ -529,6 +555,7 @@ class WorkflowRuntime:
                 "hypotheses": state["hypotheses"],
                 "critique": state["critique"],
                 "evidence_ids": state["evidence_ids"],
+                "code_evidence_ids": state.get("code_evidence_ids", []),
                 "fallback_evidence_id": state["evidence_ids"][0],
                 "insufficient_evidence": state["critique"].get("insufficient_evidence", False),
             },
@@ -570,6 +597,7 @@ class WorkflowRuntime:
                 "report": state["report"],
                 "human_feedback": state["human_feedback"].get("comment"),
                 "evidence_ids": state["evidence_ids"],
+                "code_evidence_ids": state.get("code_evidence_ids", []),
                 "fallback_evidence_id": state["evidence_ids"][0],
             },
             "report",

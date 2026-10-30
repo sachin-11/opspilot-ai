@@ -114,8 +114,42 @@ dl { display: grid; grid-template-columns: 120px 1fr; gap: 10px; } dt { color: v
 .retrieval-diagnostics span, .score-grid span { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--color-line); background: var(--color-panel); color: var(--color-muted); font-size: .75rem; }
 .retrieval-diagnostics strong, .score-grid strong { color: var(--color-ink); }
 .search-results article p { line-height: 1.55; }
+.card-list { display: grid; gap: 14px; }
+.repository-card h3, .installation-card h3 { margin: 0 0 4px; overflow-wrap: anywhere; }
+.repository-card dl, .installation-card dl { grid-template-columns: 140px minmax(0, 1fr); }
+.repository-card dd, .installation-card dd, .suspect-card, .activity-list p { overflow-wrap: anywhere; }
+.status-badge.install-active, .status-badge.repo-active, .status-badge.confidence-high { color: var(--color-ok); }
+.status-badge.install-suspended, .status-badge.repo-syncing, .status-badge.confidence-medium { color: var(--color-warn); }
+.status-badge.install-removed, .status-badge.repo-failed, .status-badge.repo-removed { color: var(--color-bad); }
+.permission-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.provider-mode { display: grid; gap: 8px; } .provider-mode p { margin: 0; }
+.provider-unavailable { border-color: #8a3c35; }
+.mapping-list, .activity-list, .suspect-list, .file-list, .signal-list { list-style: none; margin: 0; padding: 0; }
+.mapping-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--color-line); }
+.mapping-list p { margin: 4px 0 0; overflow-wrap: anywhere; }
+.mapping-form { border-top: 1px solid var(--color-line); padding-top: 18px; margin-top: 18px; }
+.activity-list li { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--color-line); }
+.activity-list p { margin: 4px 0 0; }
+.live-progress { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--color-line); background: var(--color-panel); }
+.live-progress progress { width: 100%; }
+.causation-warning { border-left-color: var(--color-bad); font-size: .95rem; }
+.suspect-list { display: grid; gap: 12px; }
+.suspect-card { border: 1px solid var(--color-line); padding: 14px; background: var(--color-canvas); display: grid; gap: 8px; }
+.suspect-card p { margin: 0; }
+.citation-label { color: var(--color-accent); font-family: var(--font-mono); font-size: .8rem; overflow-wrap: anywhere; }
+.signal-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.signal-list li { border: 1px solid var(--color-line); border-radius: 999px; padding: 3px 9px; font-size: .78rem; }
+.signal-list.matched li { color: var(--color-ok); } .signal-list.contradicting li { color: var(--color-bad); }
+.file-list li { padding: 3px 0; overflow-wrap: anywhere; }
+.code-location { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; overflow-wrap: anywhere; }
+.code-excerpt { max-width: 100%; overflow-x: auto; border: 1px solid var(--color-line); background: #0b0e10; margin: 12px 0; }
+.code-excerpt pre { margin: 0; padding: 10px 0; font: .78rem/1.5 var(--font-mono); width: max-content; min-width: 100%; }
+.code-line { display: flex; } .line-no { flex: none; width: 4ch; padding: 0 12px; text-align: right; color: var(--color-muted); user-select: none; box-sizing: content-box; } .line-text { white-space: pre; padding-right: 12px; }
 
 @media (max-width: 820px) {
+  .repository-card dl, .installation-card dl { grid-template-columns: 1fr; }
+  .mapping-list li { grid-template-columns: 1fr; }
+  .section-heading { flex-wrap: wrap; }
   .app-shell { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; padding: 16px; gap: 16px; } .sidebar nav { display: flex; overflow-x: auto; } .sidebar nav a { white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; } .sidebar nav a.active { border-bottom-color: var(--color-accent); } .connection { margin: 0; } .content { padding: 24px 16px; } .metric-grid { grid-template-columns: repeat(2, 1fr); } .detail-grid { grid-template-columns: 1fr; } .page-header, .detail-header { align-items: flex-start; } .table-wrap { margin-inline: -16px; border-inline: 0; }
   .investigation-metrics { grid-template-columns: repeat(2, 1fr); }
   .form-grid, .retrieval-diagnostics, .score-grid { grid-template-columns: 1fr; }

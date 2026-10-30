@@ -12,5 +12,7 @@ try {
     if ($Integration) {
         Import-DotEnv
         Invoke-Step 'pytest (integration)' { uv run pytest -m integration }
+        Invoke-Step 'knowledge evaluation' { uv run python -m opspilot_api.knowledge.evaluation --dataset tests/fixtures/retrieval_evaluation.json }
+        Invoke-Step 'repository evaluation' { uv run python -m opspilot_api.repositories.evaluation --dataset tests/fixtures/repository_evaluation.json }
     }
 } finally { Pop-Location }

@@ -1,14 +1,16 @@
 # OpsPilot AI
 
-OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 3: the operational knowledge and retrieval system**, built on the Module 0–2 foundation.
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 4: the read-only GitHub integration, code search, and change correlation**, built on the Module 0–3 foundation.
 
-## Module 3 capabilities
+## Module 3 and 4 capabilities
+
+Module 4 adds a **strictly read-only** GitHub App integration: repository sync, a bounded source-code index with citations, commit/pull-request/deployment tracking, deterministic incident-to-change correlation, and read-only LangGraph code-evidence tools. **Module 4 cannot modify GitHub repositories** (no branches, commits, pull requests, comments, patches, or workflow runs); fix generation and human-approved fix PRs belong to a later module.
 
 Included: the incident and human-reviewed investigation flows plus private text/Markdown/text-PDF ingestion, atomic document versions, deterministic redacted chunks, PostgreSQL full-text and pgvector search, hybrid RRF, optional reranking, citations, evaluation tooling, safe investigation RAG tools, real-time progress, and knowledge-management UI.
 
 ### Intentionally deferred to later modules
 
-GitHub/code indexing, OCR, DOCX, web scraping, AWS/CloudWatch ingestion, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation remains advisory; OpsPilot never executes production changes.**
+Fix generation and pull-request creation, OCR, DOCX, web scraping, AWS/CloudWatch ingestion, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation remains advisory; OpsPilot never executes production changes.**
 
 ## Architecture
 
@@ -169,6 +171,54 @@ uv run python -m opspilot_api.knowledge.evaluation --dataset tests/fixtures/retr
 **Experimental query enhancement.** `hybrid_rrf_rewrite` and `hybrid_rrf_hyde` use the Module 2 model-provider router to rewrite the query or generate a hypothetical passage (HyDE). They are rejected (HTTP 422) unless `KNOWLEDGE_EXPERIMENTAL_QUERY_ENHANCEMENT=true`, make at most one bounded call (`KNOWLEDGE_ENHANCEMENT_TIMEOUT_SECONDS`, `_MAX_OUTPUT_TOKENS`, `_MAX_COST_USD`), fail loudly rather than silently falling back, and are marked `experimental` in diagnostics and `RetrievalLog.filters`. They are API/evaluation-only (not in the UI selector), never used by the investigation tool, and reported in a separate evaluation section with the fake provider.
 
 The command compares all four baseline variants and fails on fixture-baseline regression, missing citations, or any cross-workspace leakage. It reports Recall@1/3/5, MRR, NDCG@5, no-answer behavior, P50/P95 latency, and leakage. The fake provider is a deterministic test/demo baseline, not a claim about production semantic quality.
+
+## GitHub integration (Module 4, read-only)
+
+### Modes
+- `GITHUB_PROVIDER=fixture` (default, used by CI and the local demo): committed synthetic repositories in `services/api/src/opspilot_api/repositories/fixtures/`. No GitHub credentials, no network. With `GITHUB_FIXTURE_REBASE_TO_NOW=true` fixture timestamps are shifted so the planted regression is about an hour before now, which makes incidents created in the demo correlate with it.
+- `GITHUB_PROVIDER=github`: a GitHub App using short-lived installation tokens.
+
+Application and LangGraph code depend only on the `RepositoryProvider` interface; every method is a read operation.
+
+### GitHub App setup
+1. Create a GitHub App. **Repository permissions: Contents (read), Metadata (read), Pull requests (read), Deployments (read). Request no write permission** and no user OAuth.
+2. Subscribe to events: Installation, Installation repositories, Push, Pull request, Deployment, Deployment status.
+3. Webhook URL `https://<your-host>/api/v1/integrations/github/webhook`, content type `application/json`, and a long random webhook secret.
+4. Generate a private key. Provide it through `GITHUB_APP_PRIVATE_KEY_FILE` (preferred, mounted outside the repository) or `GITHUB_APP_PRIVATE_KEY`; set `GITHUB_APP_ID` and `GITHUB_WEBHOOK_SECRET` (min. 16 characters). Optionally set `GITHUB_ALLOWED_INSTALLATION_IDS`. Secrets are server-side only; installation tokens are cached in process memory for their provider-declared lifetime, never stored in the database, never returned by the API, and never logged.
+5. In the UI open `/integrations/github`, enter the installation ID, and synchronize.
+
+### Webhooks
+`POST /api/v1/integrations/github/webhook` reads the raw bytes (bounded by `GITHUB_WEBHOOK_MAX_BYTES`), verifies the `X-Hub-Signature-256` HMAC with a constant-time comparison **before** parsing JSON, requires `X-GitHub-Delivery` and `X-GitHub-Event`, de-duplicates by delivery ID, stores only selected normalized fields, and returns 202 after enqueueing an RQ job. Invalid signatures never enqueue; unknown events are acknowledged and recorded as `ignored`. Repository synchronization never runs inside the HTTP request.
+
+### Indexing policy
+Allowed: Python, TypeScript/JavaScript, JSON, YAML, TOML, SQL, shell, Dockerfiles, Terraform, Markdown, Go/Java/Rust, INI. Excluded: binaries, images/media, archives, vendor/dependency/build directories, generated and minified files (including files with generated markers), source maps, lockfiles, `.git`, `.env*`, private keys/certificates, large data files, files above `REPO_MAX_FILE_BYTES`, symlinks, and submodule contents. Limits (`REPO_MAX_FILES`, `REPO_MAX_TOTAL_BYTES`, `REPO_MAX_CHUNKS`, `REPO_INDEX_TIMEOUT_SECONDS`, parse-failure ratio) fail the snapshot loudly. Secrets in allowed files are redacted line by line **before** storage or embedding, so line numbers stay exact. Only a fully persisted snapshot is activated (`repositories.active_snapshot_id` is switched in the same transaction); a failed or cancelled run keeps the previous ready snapshot searchable. A push builds a new bounded snapshot at the new head, which is safer than patching a live one (unchanged chunk embeddings are reused through a content-keyed cache) at the cost of re-reading the repository.
+
+### Service mapping
+`POST /api/v1/workspaces/{ws}/services/{service}/repositories` maps a repository to a service with an environment, a branch pattern, and an optional monorepo `path_prefix`. A service can have several repositories; duplicates return 409; deleting a mapping never deletes repository data. The first integration tracks the default branch, so a mapping whose branch pattern does not match it contributes nothing.
+
+### Code search
+```bash
+curl -X POST http://localhost:8300/api/v1/workspaces/WORKSPACE_ID/repositories/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"database connection pool exhausted","variant":"hybrid_rrf","top_k":5}'
+```
+Variants: `lexical`, `vector`, `hybrid_rrf`, `hybrid_rrf_rerank`. Filters: repository, service (applies the mapped path prefix), environment, branch, path prefix, language, symbol type. Every candidate query joins the repository's active snapshot and repeats the workspace predicate. Citations look like `[github.com/acme/checkout-api@c3c3c3c: src/checkout/db.py:9-24, ConnectionPool]` and are built only from stored repository, snapshot commit, path, and line data.
+
+### Incident/change correlation
+`GET /api/v1/workspaces/{ws}/incidents/{id}/suspect-changes` ranks recent commits and deployments of the service's mapped repositories with a documented, explainable score (no LLM): successful deploy shortly before the incident (0.30), incident-term overlap with changed paths/messages/lines (0.30), commit recency (0.15), monorepo prefix match (0.10), a revert after the incident (0.10), the commit being a revert (0.05), environment match (0.05). Reverts before the incident, failed deployments, and other-environment-only deployments are contradicting signals; changes outside a mapped prefix are excluded. Results carry matched and contradicting signals, time distance, changed files, and a confidence category. **Correlation does not prove causation**; reports must say so.
+
+### Investigation integration
+Seven read-only tools (`list_recent_changes`, `rank_suspect_changes`, `get_commit_summary`, `get_commit_diff`, `search_repository_code`, `get_code_excerpt`, `get_pull_request_context`) derive scope from the trusted investigation context, validate arguments, read only synchronized data, and produce `repository_commit`, `deployment`, `pull_request`, `code_chunk`, and `commit_diff` evidence. Repository text is untrusted evidence. Missing mappings or unavailable data produce an explicit observation, never fabricated evidence, and investigations without a mapping behave as before. `AI_MAX_TOOL_CALLS` now defaults to 14 and a plan may contain up to 12 tool requests.
+
+### Repository evaluation
+```bash
+cd services/api
+uv run python -m opspilot_api.repositories.evaluation --dataset tests/fixtures/repository_evaluation.json --json-output repository-evaluation.json --markdown-output repository-evaluation.md
+```
+23 code-search queries (18 ranked, plus no-answer and secret probes) and 13 correlation cases over fixture repositories with two similar workspaces. It fails on cross-workspace leakage, invalid citations (line, commit, or path mismatch), excluded or secret content becoming searchable, or metrics below the floors in `repositories/evaluation.py`. Measured on the fixture: lexical R@5 1.000 / MRR 0.944; hybrid RRF R@5 0.944 / MRR 0.903 (no-answer 1.0); vector-only R@5 0.722 with no-answer 0.0, because the fake 64-dimension hashed embedding gives unrelated queries similar cosine scores; correlation R@1 1.000 and R@3 1.000 on cases written by the fixture author. These are fixture baselines, not production quality claims.
+
+### Module 4 limitations
+Workspace IDs are still not authentication, so any workspace can claim any installation of the App unless `GITHUB_ALLOWED_INSTALLATION_IDS` is set. Only the default branch is tracked, only text source is indexed, GitHub API pagination is bounded (5 pages of repositories, 100 commits per sync, 30 deployments), deployments are matched by commit SHA, and correlation is heuristic. The GitHub adapter is covered by mocked-transport tests only; it has not been exercised against api.github.com from this repository.
 
 ## Current security boundary
 
