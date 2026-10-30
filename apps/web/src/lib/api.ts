@@ -166,6 +166,85 @@ export type KnowledgeSearch = z.infer<typeof knowledgeSearchSchema>;
 export type DocumentType = z.infer<typeof documentTypeSchema>;
 export type RetrievalVariant = z.infer<typeof retrievalVariantSchema>;
 
+export const sourceProviderSchema = z.enum(["generic_webhook", "aws_cloudwatch", "demo_fixture"]);
+export const sourceStatusSchema = z.enum(["active", "disabled", "failing"]);
+export const sourceSchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), service_id: z.string().uuid(), service_name: z.string().nullable(),
+  public_id: z.string(), name: z.string(), provider: sourceProviderSchema, source_type: z.string(), status: sourceStatusSchema,
+  environment: environmentSchema, region: z.string().nullable(), configuration: z.record(z.string(), z.unknown()),
+  has_secret: z.boolean(), webhook_path: z.string().nullable(), last_event_at: z.string().nullable(),
+  last_success_at: z.string().nullable(), last_failure_at: z.string().nullable(), created_at: z.string(), updated_at: z.string(),
+});
+export const sourceCreatedSchema = sourceSchema.extend({webhook_secret: z.string().nullable()});
+export const secretRotatedSchema = z.object({source_id: z.string().uuid(), webhook_secret: z.string(), rotated_at: z.string()});
+export const sourceTestSchema = z.object({
+  ok: z.boolean(), status: z.enum(["ok", "throttled", "auth_failed", "unavailable", "misconfigured"]), message: z.string(), latency_ms: z.number(),
+});
+export const signalSummarySchema = z.object({
+  signal_id: z.string().uuid(), source_id: z.string().uuid(), source_name: z.string().nullable(), provider: z.string(),
+  service_id: z.string().uuid(), service_name: z.string().nullable(), signal_type: z.string().nullable(), severity: z.string().nullable(),
+  title: z.string().nullable(), status: z.string(), received_at: z.string(), occurred_at: z.string().nullable(),
+  processed_at: z.string().nullable(), incident_id: z.string().uuid().nullable(), ingest_result: z.string().nullable(),
+  deduplication_key: z.string(), duplicate_of: z.string().uuid().nullable(), attempt_count: z.number(), failure_code: z.string().nullable(),
+});
+export const signalDetailSchema = signalSummarySchema.extend({
+  provider_event_id: z.string().nullable(), payload_hash: z.string(), schema_version: z.string(),
+  failure_message: z.string().nullable(), normalized: z.record(z.string(), z.unknown()).nullable(),
+});
+export const signalPageSchema = z.object({items: z.array(signalSummarySchema), next_cursor: z.string().nullable()});
+export const sourceHealthSchema = z.object({
+  id: z.string().uuid(), name: z.string(), provider: z.string(), status: z.string(),
+  last_event_at: z.string().nullable(), last_success_at: z.string().nullable(), last_failure_at: z.string().nullable(),
+});
+export const pipelineStatusSchema = z.object({
+  window_minutes: z.number(), generated_at: z.string(), accepted: z.number(), processed: z.number(), duplicates: z.number(),
+  failures: z.number(), dead_letters_open: z.number(), events_per_second: z.number(), latency_p50_ms: z.number().nullable(),
+  latency_p95_ms: z.number().nullable(), incidents_created: z.number(), events_correlated: z.number(),
+  consumer_lag: z.number().nullable(), lag_available: z.boolean(), broker_healthy: z.boolean(), broker_backend: z.string(),
+  backpressure: z.object({active: z.boolean(), reasons: z.array(z.string())}), sources: z.array(sourceHealthSchema),
+});
+export const deadLetterSchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid().nullable(), source_id: z.string().uuid().nullable(), source_name: z.string().nullable(),
+  signal_id: z.string().uuid().nullable(), original_topic: z.string(), partition: z.number().nullable(), offset: z.number().nullable(),
+  failure_code: z.string(), failure_class: z.enum(["retryable_exhausted", "non_retryable"]), failure_message: z.string(),
+  attempt_count: z.number(), first_failed_at: z.string(), last_failed_at: z.string(), replayed_at: z.string().nullable(),
+  resolved_at: z.string().nullable(), replay_count: z.number(), replayable: z.boolean(), payload_preview: z.record(z.string(), z.unknown()).nullable(),
+});
+export const deadLetterPageSchema = z.object({items: z.array(deadLetterSchema), next_cursor: z.string().nullable()});
+export const replaySchema = z.object({
+  status: z.enum(["replayed", "already_replayed"]), dead_letter_id: z.string().uuid(), replayed_at: z.string().nullable(), replay_count: z.number(),
+});
+export const demoGenerateResponseSchema = z.object({source_id: z.string().uuid(), accepted: z.number(), duplicates: z.number(), rejected: z.number()});
+const logLineSchema = z.object({timestamp: z.string(), message: z.string(), severity: z.string().nullable().optional(), log_group: z.string().nullable().optional()});
+const metricPointSchema = z.object({timestamp: z.string(), value: z.number()});
+const metricComparisonSchema = z.object({
+  metric_name: z.string(), statistic: z.string(), unit: z.string().nullable(), baseline_average: z.number().nullable(),
+  incident_average: z.number().nullable(), change_percent: z.number().nullable(),
+  baseline_points: z.array(metricPointSchema), incident_points: z.array(metricPointSchema),
+});
+const alarmContextSchema = z.object({
+  alarm_name: z.string(), state: z.string(), metric_name: z.string().nullable(), threshold: z.number().nullable(),
+  comparison: z.string().nullable(), period_seconds: z.number().nullable(),
+  transitions: z.array(z.object({at: z.string(), from_state: z.string().nullable(), to_state: z.string(), reason: z.string().nullable()})),
+});
+export const incidentObservabilitySchema = z.object({
+  incident_id: z.string().uuid(), has_source: z.boolean(), source_id: z.string().uuid().nullable(), source_name: z.string().nullable(),
+  provider: z.string().nullable(), signals: z.array(signalSummarySchema), logs: z.array(logLineSchema),
+  metric: metricComparisonSchema.nullable(), alarm: alarmContextSchema.nullable(), unavailable: z.string().nullable(), notice: z.string(),
+});
+export type Source = z.infer<typeof sourceSchema>;
+export type SourceCreated = z.infer<typeof sourceCreatedSchema>;
+export type SourceProvider = z.infer<typeof sourceProviderSchema>;
+export type SourceTestResult = z.infer<typeof sourceTestSchema>;
+export type SignalSummary = z.infer<typeof signalSummarySchema>;
+export type SignalDetail = z.infer<typeof signalDetailSchema>;
+export type PipelineStatus = z.infer<typeof pipelineStatusSchema>;
+export type DeadLetter = z.infer<typeof deadLetterSchema>;
+export type IncidentObservability = z.infer<typeof incidentObservabilitySchema>;
+export type SourceCreate = {name: string; provider: SourceProvider; service_id: string; environment: Environment; region?: string | null; configuration: Record<string, unknown>};
+export type SourceUpdate = {name?: string; status?: "active" | "disabled"; environment?: Environment; region?: string | null; configuration?: Record<string, unknown>};
+export type DemoGenerateRequest = {source_id?: string; count: number; duplicate_percent: number; invalid_percent: number};
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
@@ -242,4 +321,16 @@ export const api = {
   deleteMapping: (baseUrl: string, workspaceId: string, serviceId: string, mappingId: string) => requestEmpty(baseUrl, `/api/v1/workspaces/${workspaceId}/services/${serviceId}/repositories/${mappingId}`, {method: "DELETE"}),
   codeSearch: (baseUrl: string, workspaceId: string, data: CodeSearchRequest) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/search`, codeSearchSchema, {method: "POST", body: JSON.stringify(data)}),
   suspectChanges: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/suspect-changes`, suspectChangesSchema),
+  obsSources: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/sources`, z.array(sourceSchema)),
+  obsCreateSource: (baseUrl: string, workspaceId: string, data: SourceCreate) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/sources`, sourceCreatedSchema, {method: "POST", body: JSON.stringify(data)}),
+  obsUpdateSource: (baseUrl: string, workspaceId: string, sourceId: string, data: SourceUpdate) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/sources/${sourceId}`, sourceSchema, {method: "PATCH", body: JSON.stringify(data)}),
+  obsTestSource: (baseUrl: string, workspaceId: string, sourceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/sources/${sourceId}/test`, sourceTestSchema, {method: "POST"}),
+  obsRotateSecret: (baseUrl: string, workspaceId: string, sourceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/sources/${sourceId}/rotate-secret`, secretRotatedSchema, {method: "POST"}),
+  obsSignals: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/signals?${query}`, signalPageSchema),
+  obsSignal: (baseUrl: string, workspaceId: string, signalId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/signals/${signalId}`, signalDetailSchema),
+  obsPipeline: (baseUrl: string, workspaceId: string, windowMinutes: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/pipeline?window_minutes=${windowMinutes}`, pipelineStatusSchema),
+  obsDeadLetters: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/dead-letters?${query}`, deadLetterPageSchema),
+  obsReplay: (baseUrl: string, workspaceId: string, deadLetterId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/dead-letters/${deadLetterId}/replay`, replaySchema, {method: "POST"}),
+  obsDemoGenerate: (baseUrl: string, workspaceId: string, data: DemoGenerateRequest) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/demo/generate`, demoGenerateResponseSchema, {method: "POST", body: JSON.stringify(data)}),
+  incidentObservability: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/observability`, incidentObservabilitySchema),
 };

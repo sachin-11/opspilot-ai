@@ -105,6 +105,9 @@ class FakeProvider(ModelProvider):
                         tool_name="search_repository_code",
                         arguments={"query": query or "incident troubleshooting", "top_k": 3},
                     ),
+                    ToolRequest(tool_name="query_service_logs", arguments={"limit": 20}),
+                    ToolRequest(tool_name="compare_metric_windows"),
+                    ToolRequest(tool_name="get_alarm_context"),
                     ToolRequest(
                         tool_name="search_runbooks",
                         arguments={
@@ -118,13 +121,14 @@ class FakeProvider(ModelProvider):
             )
         elif schema is HypothesisSet:
             code_ids = [UUID(value) for value in context.get("code_evidence_ids", [])][:3]
+            obs_ids = [UUID(value) for value in context.get("observability_evidence_ids", [])][:2]
             data = HypothesisSet(
                 hypotheses=[
                     Hypothesis(
                         description="Stored events indicate a repeated service failure pattern."
                         if not insufficient
                         else "Available data does not establish a root cause.",
-                        supporting_evidence_ids=first,
+                        supporting_evidence_ids=[*first, *[i for i in obs_ids if i not in first]],
                         contradicting_evidence_ids=[],
                         confidence=0.72 if not insufficient else 0.2,
                         missing_evidence=[]
@@ -189,6 +193,11 @@ class FakeProvider(ModelProvider):
                     *[
                         UUID(value)
                         for value in context.get("code_evidence_ids", [])[:2]
+                        if UUID(value) not in first
+                    ],
+                    *[
+                        UUID(value)
+                        for value in context.get("observability_evidence_ids", [])[:2]
                         if UUID(value) not in first
                     ],
                 ],

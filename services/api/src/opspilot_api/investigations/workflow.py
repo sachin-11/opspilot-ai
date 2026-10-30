@@ -9,7 +9,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from redis import Redis
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from opspilot_api.config import Settings
@@ -55,6 +55,7 @@ class InvestigationState(TypedDict, total=False):
     plan: dict[str, Any]
     evidence_ids: list[str]
     code_evidence_ids: list[str]
+    observability_evidence_ids: list[str]
     tool_observations: list[dict[str, Any]]
     hypotheses: dict[str, Any]
     critique: dict[str, Any]
@@ -64,12 +65,21 @@ class InvestigationState(TypedDict, total=False):
     error_state: dict[str, str]
 
 
+EVIDENCE_RESERVE_PER_TOOL = 3
 CODE_SOURCE_TYPES = (
     "repository_commit",
     "deployment",
     "pull_request",
     "code_chunk",
     "commit_diff",
+)
+
+
+OBSERVABILITY_SOURCE_TYPES = (
+    "observability_log",
+    "observability_metric",
+    "observability_alarm",
+    "normalized_signal",
 )
 
 
@@ -423,7 +433,7 @@ class WorkflowRuntime:
                 )
                 evidence_ids: list[str] = []
                 observations: list[dict[str, Any]] = []
-                for request in plan.tool_requests:
+                for position, request in enumerate(plan.tool_requests):
                     result = execute_tool(
                         request.tool_name,
                         session,
@@ -431,13 +441,18 @@ class WorkflowRuntime:
                         request.arguments,
                         self.settings.AI_MAX_TOOL_OUTPUT_BYTES,
                     )
-                    observations.append(
-                        {
-                            "tool_name": result.tool_name,
-                            "summary": result.summary,
-                            "data": result.data,
-                        }
+                    # Evidence budget: a tool may use all but a small reserve for the tools that
+                    # still have to run, so one chatty tool (an incident with hundreds of
+                    # correlated events) can no longer starve later tools or fail the run.
+                    stored = session.scalar(
+                        select(func.count(EvidenceItem.id)).where(
+                            EvidenceItem.investigation_id == investigation.id
+                        )
                     )
+                    remaining_tools = len(plan.tool_requests) - position - 1
+                    budget = max(0, self.settings.AI_MAX_EVIDENCE_ITEMS - (stored or 0))
+                    allowance = max(1, budget - EVIDENCE_RESERVE_PER_TOOL * remaining_tools)
+                    added = truncated = 0
                     for draft in result.evidence:
                         existing = session.scalar(
                             select(EvidenceItem).where(
@@ -446,17 +461,9 @@ class WorkflowRuntime:
                             )
                         )
                         if existing is None:
-                            current_count = len(
-                                list(
-                                    session.scalars(
-                                        select(EvidenceItem.id).where(
-                                            EvidenceItem.investigation_id == investigation.id
-                                        )
-                                    )
-                                )
-                            )
-                            if current_count >= self.settings.AI_MAX_EVIDENCE_ITEMS:
-                                raise WorkflowLimitReached("maximum evidence item limit reached")
+                            if added >= allowance or added >= budget:
+                                truncated += 1
+                                continue
                             existing = EvidenceItem(
                                 id=uuid4(),
                                 workspace_id=investigation.workspace_id,
@@ -472,7 +479,17 @@ class WorkflowRuntime:
                             )
                             session.add(existing)
                             session.flush()
+                            added += 1
                         evidence_ids.append(str(existing.id))
+                    observations.append(
+                        {
+                            "tool_name": result.tool_name,
+                            "summary": result.summary,
+                            "data": {**result.data, "evidence_truncated": truncated}
+                            if truncated
+                            else result.data,
+                        }
+                    )
                 evidence_ids = list(dict.fromkeys(evidence_ids))
                 code_evidence_ids = [
                     str(item)
@@ -496,9 +513,21 @@ class WorkflowRuntime:
                     f"Collected {len(evidence_ids)} deduplicated evidence items.",
                     output,
                 )
+                observability_evidence_ids = [
+                    str(item)
+                    for item in session.scalars(
+                        select(EvidenceItem.id).where(
+                            EvidenceItem.investigation_id == investigation.id,
+                            EvidenceItem.workspace_id == investigation.workspace_id,
+                            EvidenceItem.id.in_([UUID(value) for value in evidence_ids]),
+                            EvidenceItem.source_type.in_(OBSERVABILITY_SOURCE_TYPES),
+                        )
+                    )
+                ]
                 return {
                     "evidence_ids": evidence_ids,
                     "code_evidence_ids": code_evidence_ids,
+                    "observability_evidence_ids": observability_evidence_ids,
                     "tool_observations": observations,
                 }
             except Exception as exc:
@@ -521,6 +550,7 @@ class WorkflowRuntime:
                 "observations": state["tool_observations"],
                 "evidence_ids": state["evidence_ids"],
                 "code_evidence_ids": state.get("code_evidence_ids", []),
+                "observability_evidence_ids": state.get("observability_evidence_ids", []),
             },
             "hypotheses",
         )
@@ -556,6 +586,7 @@ class WorkflowRuntime:
                 "critique": state["critique"],
                 "evidence_ids": state["evidence_ids"],
                 "code_evidence_ids": state.get("code_evidence_ids", []),
+                "observability_evidence_ids": state.get("observability_evidence_ids", []),
                 "fallback_evidence_id": state["evidence_ids"][0],
                 "insufficient_evidence": state["critique"].get("insufficient_evidence", False),
             },
@@ -598,6 +629,7 @@ class WorkflowRuntime:
                 "human_feedback": state["human_feedback"].get("comment"),
                 "evidence_ids": state["evidence_ids"],
                 "code_evidence_ids": state.get("code_evidence_ids", []),
+                "observability_evidence_ids": state.get("observability_evidence_ids", []),
                 "fallback_evidence_id": state["evidence_ids"][0],
             },
             "report",

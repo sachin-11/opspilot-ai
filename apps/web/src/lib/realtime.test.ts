@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { invalidateRealtimeEvent, reconnectDelay, type RealtimeEvent } from "./realtime";
+import { invalidateRealtimeEvent, observabilityLiveKey, reconnectDelay, type RealtimeEvent } from "./realtime";
 
 const workspaceId = "11111111-1111-4111-8111-111111111111";
 const incidentId = "22222222-2222-4222-8222-222222222222";
@@ -72,5 +72,25 @@ describe("realtime query routing", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: ["knowledge-document", workspaceId, "66666666-6666-4666-8666-666666666666"],
     });
+  });
+
+  it("refreshes observability queries and records the live update without payloads", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const signalId = "88888888-8888-4888-8888-888888888888";
+    await invalidateRealtimeEvent(client, workspaceId, {...event, type: "observability.backpressure_started", data: {reason: "lag", signal_id: signalId}});
+    for (const key of ["obs-pipeline", "obs-signals", "obs-sources", "obs-dead-letters", "obs-incident"]) {
+      expect(invalidate).toHaveBeenCalledWith({queryKey: [key, workspaceId]});
+    }
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["obs-signal", workspaceId, signalId]});
+    expect(client.getQueryData(observabilityLiveKey(workspaceId))).toMatchObject({type: "observability.backpressure_started", reason: "lag"});
+  });
+
+  it("ignores observability events for another workspace", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await invalidateRealtimeEvent(client, "44444444-4444-4444-8444-444444444444", {...event, type: "observability.signal_failed", data: {}});
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(client.getQueryData(observabilityLiveKey(workspaceId))).toBeUndefined();
   });
 });

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useOps } from "./providers";
 
-const links = [["/", "Overview"], ["/incidents", "Incidents"], ["/incidents/new", "Create incident"], ["/knowledge", "Knowledge"], ["/knowledge/search", "Knowledge search"], ["/repositories", "Repositories"], ["/repositories/search", "Code search"], ["/integrations/github", "GitHub"],["/settings/services", "Services"]] as const;
+const links = [["/", "Overview"], ["/incidents", "Incidents"], ["/incidents/new", "Create incident"], ["/knowledge", "Knowledge"], ["/knowledge/search", "Knowledge search"], ["/repositories", "Repositories"], ["/repositories/search", "Code search"], ["/integrations/github", "GitHub"], ["/observability", "Pipeline"], ["/observability/sources", "Obs sources"], ["/observability/signals", "Signals"], ["/observability/dead-letters", "Dead letters"],["/settings/services", "Services"]] as const;
 
 export function AppShell({children}: {children: React.ReactNode}) {
   const path = usePathname();

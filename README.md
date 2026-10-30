@@ -1,8 +1,10 @@
 # OpsPilot AI
 
-OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 4: the read-only GitHub integration, code search, and change correlation**, built on the Module 0–3 foundation.
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 5: the observability event pipeline (signed webhooks, Kafka-compatible streaming, CloudWatch read tools)**, built on the Module 0–4 foundation, including the read-only GitHub integration.
 
-## Module 3 and 4 capabilities
+## Module 3, 4, and 5 capabilities
+
+Module 5 ingests production signals through signed webhooks and a Kafka-compatible broker, normalizes and de-duplicates them, feeds the existing incident correlation, and gives investigations bounded, read-only log/metric/alarm tools. Automated remediation is not implemented.
 
 Module 4 adds a **strictly read-only** GitHub App integration: repository sync, a bounded source-code index with citations, commit/pull-request/deployment tracking, deterministic incident-to-change correlation, and read-only LangGraph code-evidence tools. **Module 4 cannot modify GitHub repositories** (no branches, commits, pull requests, comments, patches, or workflow runs); fix generation and human-approved fix PRs belong to a later module.
 
@@ -10,7 +12,7 @@ Included: the incident and human-reviewed investigation flows plus private text/
 
 ### Intentionally deferred to later modules
 
-Fix generation and pull-request creation, OCR, DOCX, web scraping, AWS/CloudWatch ingestion, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation remains advisory; OpsPilot never executes production changes.**
+Fix generation and pull-request creation, OCR, DOCX, web scraping, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation remains advisory; OpsPilot never executes production changes.**
 
 ## Architecture
 
@@ -219,6 +221,84 @@ uv run python -m opspilot_api.repositories.evaluation --dataset tests/fixtures/r
 
 ### Module 4 limitations
 Workspace IDs are still not authentication, so any workspace can claim any installation of the App unless `GITHUB_ALLOWED_INSTALLATION_IDS` is set. Only the default branch is tracked, only text source is indexed, GitHub API pagination is bounded (5 pages of repositories, 100 commits per sync, 30 deployments), deployments are matched by commit SHA, and correlation is heuristic. The GitHub adapter is covered by mocked-transport tests only; it has not been exercised against api.github.com from this repository.
+
+## Observability event pipeline (Module 5)
+
+Signed webhooks and read-only CloudWatch/fixture queries feed incident correlation through a Kafka-compatible broker. The system is **at-least-once with idempotent consumers; it does not claim exactly-once delivery** (see `docs/architecture.md` for why).
+
+### Setup and local broker
+Docker Compose adds `broker` (Redpanda, single node, no ZooKeeper, named volume `broker_data`), a one-shot `broker-init` that creates the topics, and two consumer services:
+
+```bash
+# Fernet key that encrypts webhook secrets at rest (the .env.example value is a throwaway):
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+docker compose up -d --build        # broker, broker-init, api, worker, raw-consumer, normalized-consumer, web
+docker compose exec broker rpk cluster health
+docker compose exec broker rpk topic list
+docker compose exec broker rpk group describe opspilot-normalized-consumer   # lag per partition
+docker compose logs -f raw-consumer normalized-consumer
+```
+Containers reach the broker at `broker:9092`; the only published port is `127.0.0.1:${KAFKA_HOST_PORT:-19092}` for host-run tests and the benchmark. Metrics are exposed at `GET /api/v1/metrics` (API) and on ports 9108/9109 (consumers, container-internal).
+
+Troubleshooting: if the API returns 503 `broker_unavailable`, check `docker compose ps broker` and `rpk cluster health`. Host tools must use `127.0.0.1:19092` (not `localhost`, which can resolve to IPv6). A stuck message shows up as growing consumer lag (`rpk group describe`) or an open dead letter in `/observability/dead-letters`. `docker compose down -v` also deletes the broker volume.
+
+### Topics
+| Topic | Contents |
+| --- | --- |
+| `opspilot.observability.raw.v1` | redacted, schema-versioned envelopes straight from ingress |
+| `opspilot.observability.normalized.v1` | canonical normalized signals |
+| `opspilot.observability.dead-letter.v1` | sanitized failure envelopes (with `original_topic`, partition, offset, failure code) |
+
+The record key is `workspace_id:service_id`: ordering is guaranteed per workspace+service within a partition, not across services, and not across stages when retries occur. Headers carry routing metadata only (never credentials). Messages with an unknown `schema_version` are dead-lettered.
+
+### Generic webhook sources
+Create a source in `/observability/sources/new` (or `POST /api/v1/workspaces/{ws}/observability/sources`); the signing secret is shown **once** (store it; rotate to get a new one, the old one stops working immediately). Sign `"{timestamp}.{raw body}"` with HMAC-SHA256 and send:
+
+```bash
+SECRET=whsec_...; PUBLIC_ID=...; TS=$(date +%s)
+BODY='{"type":"alert","event_id":"evt-1","title":"Checkout 5xx high","severity":"high","occurred_at":"2026-03-10T12:00:00Z"}'
+SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -X POST "http://localhost:8300/api/v1/ingest/webhooks/$PUBLIC_ID" \
+  -H "Content-Type: application/json" -H "X-OpsPilot-Timestamp: $TS" -H "X-OpsPilot-Signature: $SIG" \
+  --data-raw "$BODY"
+```
+Responses: `202` accepted (durably published), `200` duplicate (original `signal_id`), `401` invalid/missing/expired signature, `413` too large, `400` malformed JSON, `403` disabled source, `404` unknown source, `429` rate limited, `503` cannot durably accept. Payload types: `alert`/`availability`/`security`/`custom`, `log` (error level or above), `metric` (value + threshold), `deployment`, plus CloudWatch alarm and log shapes. Normalization is deterministic (no LLM): required fields are validated explicitly (never guessed), strings are bounded and redacted, unknown fields survive only inside bounded sanitized attributes, and long strings are truncated to 2000 characters. Secrets are encrypted at rest with `OBS_SECRET_ENCRYPTION_KEY`; production key management is deferred.
+
+### CloudWatch and fixture sources
+`aws_cloudwatch` sources are configured with `role_arn`, `external_id_ref` (the *name* of an environment variable holding the external ID), `allowed_log_groups`, `allowed_namespaces`, `alarm_names`, `max_window_minutes`, `max_results`, `timeout_seconds`, and `default_metric`. Credential-looking keys are rejected; no AWS key is stored or returned; temporary role credentials are used. Only `FilterLogEvents`, `GetMetricStatistics`, `DescribeAlarms`, and `DescribeAlarmHistory` are ever called, within the configured allow-lists and bounds. The `demo_fixture` provider returns deterministic logs, metrics, and alarms and can simulate `throttle`, `timeout`, `auth_failure`, and `error` (`configuration.fixture_mode`); CI and the demo use it exclusively. The CloudWatch adapter is verified with botocore stubs only; it has not been run against real AWS from this repository.
+
+### Deduplication, retries, dead letters, backpressure
+* **Deduplication:** provider event ID, then `Idempotency-Key`, then a normalized fingerprint inside `OBS_DEDUP_WINDOW_SECONDS`. Duplicates return `200`, never create a second incident or timeline entry, and are visible as `duplicate` in the signal explorer.
+* **Retries:** transient failures (broker, database, throttling) retry with exponential backoff and jitter up to `OBS_RETRY_MAX_ATTEMPTS` and `OBS_RETRY_MAX_AGE_SECONDS`; invalid signature/schema/fields, oversized payloads, tenant mismatches, and configuration failures are not retried.
+* **Dead letters:** exhausted or terminal messages are stored (redacted, bounded) and published to the dead-letter topic with a sanitized reason; `POST .../dead-letters/{id}/replay` republishes once, is audited, and is idempotent (`already_replayed`).
+* **Backpressure:** per-source (`OBS_SOURCE_RATE_PER_SECOND`) and per-workspace (`OBS_WORKSPACE_RATE_PER_SECOND`) limits return `429` with `Retry-After`; an unreachable broker, unavailable rate-limit state, consumer lag above `OBS_LAG_THRESHOLD`, or a dead-letter burst returns `503`. `202` is only ever returned after durable acceptance, nothing is buffered in memory, and pressure clears automatically.
+* **Evidence budget:** an investigation now truncates an over-chatty tool's evidence (and records `evidence_truncated`) instead of failing at `AI_MAX_EVIDENCE_ITEMS`, reserving room for the tools that still have to run. `AI_MAX_TOOL_CALLS` defaults to 20 and a plan may contain 16 tool requests.
+
+### Pipeline verification, load test, and benchmark
+```bash
+cd services/api
+uv run python -m opspilot_api.observability.smoke      # deterministic end-to-end smoke test (memory bus)
+uv run pytest -m integration tests/test_observability_integration.py tests/test_observability_kafka.py
+# Benchmark against the running Compose stack (development only; refuses production):
+uv run python -m opspilot_api.observability.loadgen --events 2000 --rate 200 \
+  --duplicate-percent 10 --invalid-percent 2 --services 3 --fingerprints 5 --seed 7
+uv run python -m opspilot_api.observability.loadgen --events 3000 --rate 0   # burst mode
+```
+Results (JSON) are written to the git-ignored `benchmark-results/` directory. They report accepted and processed events per second, request and end-to-end P50/P95/P99 latency, duplicate suppression, error and dead-letter rates, consumer lag, and incidents created/correlated. Resilience scenarios are covered by tests: broker unavailable and recovery, backpressure (`test_backpressure_returns_honest_status_codes_and_recovers`), consumer crash before commit and restart, duplicate delivery, poison messages, unsupported schema version, dead-letter replay, provider throttling and authentication failure, and webhook replay (`test_observability_integration.py`, `test_observability_kafka.py`).
+
+#### Measured benchmark (this repository, one Windows laptop running Docker Compose, 2026-10-30)
+Single-node Redpanda, one raw consumer, one normalized consumer, 16–48 concurrent clients, seeded plan (10% duplicates, 2% invalid).
+
+| Run | Sent | Accepted/s | Processed/s | Request P50 / P95 / P99 | End-to-end P50 / P95 / P99 | Duplicates suppressed | Dead-letter rate | Errors (non-2xx) | Max / final lag |
+| --- | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | --- |
+| `--rate 200`, 3 services | 2000 | 34.9 | 25.7 | 350 / 616 / 2667 ms | 12.0 / 16.0 / 16.0 s | 213 of 213 | 2.4% | 0 | 580 / 0 |
+| `--rate 0` burst, 48 clients, 1 service | 1500 | 41.8 | 23.8 | 912 / 2251 / 3347 ms | 20.3 / 22.0 / 22.1 s | 163 of 163 | 2.2% | 0 | 831 / 0 |
+
+What this shows, and what it does not: the requested 200 events/s was **not** reached; the synchronous ingress path (signature check, receipt commit, acknowledged broker publish, second commit) sustained roughly 35–42 accepted events/s here, and the single normalized consumer processed roughly 24–26/s, so a backlog built up (peak lag 580–831 messages) and end-to-end latency of 12–22 s is queueing delay that drained to zero lag. No request failed, every injected duplicate was suppressed, every incident was created or correlated once (15 and 5 incidents), and the dead-letter rate equals the injected invalid rate. Rate limits (429) were never hit because throughput stayed below the 100/s per-source limit. These are single-machine numbers for a development stack, not a capacity claim; horizontally scaling consumers (more partitions and group members) and batching database work are the obvious next steps and were not attempted.
+
+
+### Module 5 limitations
+Workspace IDs are still not authentication; the metrics endpoint and webhook public IDs are unauthenticated by design (HMAC protects ingestion); webhook secrets are encrypted with a single environment key; the broker is single-node with replication factor 1 and no TLS/SASL (local development only); rate-limit and lag checks are best-effort and approximate; ordering is per workspace+service only; CloudWatch is verified with stubs, not real AWS; the local benchmark measures one laptop-class machine, not production capacity. Automated remediation, Slack, and production AWS deployment remain deferred.
 
 ## Current security boundary
 
