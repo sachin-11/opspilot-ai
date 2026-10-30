@@ -31,13 +31,20 @@ class ToolRequest(BaseModel):
         "compare_incident_windows",
         "search_runbooks",
         "get_knowledge_chunk",
+        "list_recent_changes",
+        "rank_suspect_changes",
+        "get_commit_summary",
+        "get_commit_diff",
+        "search_repository_code",
+        "get_code_excerpt",
+        "get_pull_request_context",
     ]
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class InvestigationPlan(BaseModel):
     objective: str = Field(max_length=500)
-    tool_requests: list[ToolRequest] = Field(min_length=1, max_length=8)
+    tool_requests: list[ToolRequest] = Field(min_length=1, max_length=12)
 
 
 class Hypothesis(BaseModel):

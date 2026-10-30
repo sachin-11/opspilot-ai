@@ -99,6 +99,12 @@ class FakeProvider(ModelProvider):
                     ToolRequest(tool_name="search_ingested_events", arguments={"limit": 50}),
                     ToolRequest(tool_name="summarize_event_frequency"),
                     ToolRequest(tool_name="compare_incident_windows"),
+                    ToolRequest(tool_name="list_recent_changes", arguments={"hours": 48}),
+                    ToolRequest(tool_name="rank_suspect_changes", arguments={"limit": 5}),
+                    ToolRequest(
+                        tool_name="search_repository_code",
+                        arguments={"query": query or "incident troubleshooting", "top_k": 3},
+                    ),
                     ToolRequest(
                         tool_name="search_runbooks",
                         arguments={
@@ -111,6 +117,7 @@ class FakeProvider(ModelProvider):
                 ],
             )
         elif schema is HypothesisSet:
+            code_ids = [UUID(value) for value in context.get("code_evidence_ids", [])][:3]
             data = HypothesisSet(
                 hypotheses=[
                     Hypothesis(
@@ -126,7 +133,29 @@ class FakeProvider(ModelProvider):
                         suggested_validation=(
                             "Verify the cited event pattern against service telemetry."
                         ),
-                    )
+                    ),
+                    *(
+                        [
+                            Hypothesis(
+                                description=(
+                                    "A recent code change correlates in time and content with "
+                                    "the incident; this is correlation, not confirmed causation."
+                                ),
+                                supporting_evidence_ids=code_ids,
+                                contradicting_evidence_ids=[],
+                                confidence=0.4,
+                                missing_evidence=[
+                                    "confirmation that the change caused the failure"
+                                ],
+                                suggested_validation=(
+                                    "Review the cited change and compare behavior before and "
+                                    "after the deployment."
+                                ),
+                            )
+                        ]
+                        if code_ids
+                        else []
+                    ),
                 ]
             )
         elif schema is CritiqueResult:
@@ -155,12 +184,29 @@ class FakeProvider(ModelProvider):
                 else "The cited events support a repeated service failure pattern.",
                 confidence=0.2 if insufficient else 0.7,
                 impact="Service reliability may be reduced.",
-                evidence_citations=first or [UUID(str(context["fallback_evidence_id"]))],
+                evidence_citations=[
+                    *(first or [UUID(str(context["fallback_evidence_id"]))]),
+                    *[
+                        UUID(value)
+                        for value in context.get("code_evidence_ids", [])[:2]
+                        if UUID(value) not in first
+                    ],
+                ],
                 alternative_hypotheses=["A dependency or deployment change may be contributing."],
                 immediate_containment_steps=[step],
                 remediation_plan=[step],
                 verification_plan=[step],
-                unknowns_and_assumptions=["No external telemetry was queried."],
+                unknowns_and_assumptions=[
+                    "No external telemetry was queried.",
+                    *(
+                        [
+                            "Code-change findings are correlations based on timing and content, "
+                            "not confirmed causation."
+                        ]
+                        if context.get("code_evidence_ids")
+                        else []
+                    ),
+                ],
                 abstained=insufficient,
             )
         elif schema is QueryRewrite:

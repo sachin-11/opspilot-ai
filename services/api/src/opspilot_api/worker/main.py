@@ -15,6 +15,7 @@ from opspilot_api.infrastructure import create_db_engine, create_session_factory
 from opspilot_api.investigations.service import recover_stale_investigations
 from opspilot_api.knowledge.service import recover_stale_jobs
 from opspilot_api.logging_config import configure_logging
+from opspilot_api.repositories.service import recover_stale_repository_work
 
 logger = logging.getLogger("opspilot_api.worker")
 
@@ -48,7 +49,7 @@ def log_job_failure(
     return True
 
 
-async def recover_stale_work(settings: Settings) -> tuple[int, int]:
+async def recover_stale_work(settings: Settings) -> tuple[int, int, int]:
     """Fail abandoned running investigations before accepting new jobs."""
     engine = create_db_engine(settings)
     try:
@@ -56,7 +57,8 @@ async def recover_stale_work(settings: Settings) -> tuple[int, int]:
         async with session_factory() as session:
             investigations = await recover_stale_investigations(session, settings)
             ingestion_jobs = await recover_stale_jobs(session, settings)
-            return investigations, ingestion_jobs
+            repository_work = await recover_stale_repository_work(session, settings)
+            return investigations, ingestion_jobs, repository_work
     finally:
         await engine.dispose()
 
@@ -65,7 +67,9 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.LOG_LEVEL.value)
     try:
-        recovered_investigations, recovered_ingestions = asyncio.run(recover_stale_work(settings))
+        recovered_investigations, recovered_ingestions, recovered_repositories = asyncio.run(
+            recover_stale_work(settings)
+        )
     except SQLAlchemyError as exc:
         # On the first boot Compose starts the worker before Alembic creates the
         # investigation tables. Recovery is retried on the next worker start.
@@ -84,6 +88,11 @@ def main() -> None:
                 "stale knowledge ingestions recovered",
                 extra={"count": recovered_ingestions},
             )
+        if recovered_repositories:
+            logger.warning(
+                "stale repository work recovered",
+                extra={"count": recovered_repositories},
+            )
     connection = create_redis(settings)
     worker = Worker(
         QUEUES,
@@ -94,7 +103,8 @@ def main() -> None:
     )
     logger.info("worker starting", extra={"queues": QUEUES, "worker": worker.name})
     try:
-        worker.work(with_scheduler=False)
+        # The scheduler releases rate-limited repository jobs at their provider reset time.
+        worker.work(with_scheduler=True)
     finally:
         logger.info("worker stopped", extra={"worker": worker.name})
         connection.close()

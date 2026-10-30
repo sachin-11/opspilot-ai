@@ -30,3 +30,5 @@ Thumbs.db
 # Generated retrieval evaluation output
 services/api/retrieval-evaluation*.json
 services/api/retrieval-evaluation*.md
+services/api/repository-evaluation*.json
+services/api/repository-evaluation*.md

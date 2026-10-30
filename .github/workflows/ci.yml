@@ -84,6 +84,7 @@ jobs:
       EMBEDDING_MODEL: hash-bow-v1
       EMBEDDING_DIMENSIONS: "64"
       RERANK_PROVIDER: fake
+      GITHUB_PROVIDER: fixture
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -110,6 +111,12 @@ jobs:
           --dataset tests/fixtures/retrieval_evaluation.json
           --json-output retrieval-evaluation.json
           --markdown-output retrieval-evaluation.md
+      - name: Deterministic code-search and change-correlation evaluation
+        run: >-
+          uv run python -m opspilot_api.repositories.evaluation
+          --dataset tests/fixtures/repository_evaluation.json
+          --json-output repository-evaluation.json
+          --markdown-output repository-evaluation.md
 
   compose:
     name: Docker Compose config

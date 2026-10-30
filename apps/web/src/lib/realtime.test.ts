@@ -46,6 +46,19 @@ describe("realtime query routing", () => {
     });
   });
 
+  it("refreshes repository queries and stores indexing progress", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const repositoryId = "77777777-7777-4777-8777-777777777777";
+    await invalidateRealtimeEvent(client, workspaceId, {...event, type: "repository.indexing_progress", incident_id: null, data: {repository_id: repositoryId, stage: "chunking", files_processed: 2, total_files: 4}});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["repositories", workspaceId]});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["repository", workspaceId, repositoryId]});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["github-installations", workspaceId]});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["service-mappings", workspaceId]});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["suspect-changes", workspaceId]});
+    expect(client.getQueryData(["repository-progress", workspaceId, repositoryId])).toMatchObject({type: "repository.indexing_progress", stage: "chunking", files_processed: 2});
+  });
+
   it("refreshes knowledge list and document detail for ingestion events", async () => {
     const client = new QueryClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");

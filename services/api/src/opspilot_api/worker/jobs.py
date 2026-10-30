@@ -11,6 +11,11 @@ from opspilot_api.config import get_settings
 from opspilot_api.investigations.models import Investigation, InvestigationReview
 from opspilot_api.investigations.workflow import run_workflow
 from opspilot_api.knowledge.ingestion import run_ingestion
+from opspilot_api.repositories.jobs import (
+    run_installation_sync_job,
+    run_repository_sync_job,
+    run_webhook_delivery_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,3 +85,28 @@ def run_knowledge_ingestion(workspace_id: str, job_id: str) -> None:
     from uuid import UUID
 
     run_ingestion(get_settings(), UUID(workspace_id), UUID(job_id))
+
+
+def run_installation_sync(workspace_id: str, installation_id: str, attempt: int = 1) -> None:
+    """Synchronize one GitHub installation's repositories (read-only)."""
+    from uuid import UUID
+
+    run_installation_sync_job(get_settings(), UUID(workspace_id), UUID(installation_id), attempt)
+
+
+def run_repository_sync(
+    workspace_id: str, repository_id: str, options: str = "", attempt: int = 1
+) -> None:
+    """Sync commits/deployments and (re)index one repository's default-branch snapshot."""
+    from uuid import UUID
+
+    run_repository_sync_job(
+        get_settings(), UUID(workspace_id), UUID(repository_id), options, attempt
+    )
+
+
+def run_webhook_delivery(delivery_id: str, attempt: int = 1) -> None:
+    """Apply one signature-verified, de-duplicated GitHub webhook delivery."""
+    from uuid import UUID
+
+    run_webhook_delivery_job(get_settings(), UUID(delivery_id), attempt)

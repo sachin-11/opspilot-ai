@@ -1,4 +1,4 @@
-# OpsPilot AI - Architecture (Module 2)
+# OpsPilot AI - Architecture (Modules 0-4)
 
 ## Container view
 
@@ -291,3 +291,101 @@ stateDiagram-v2
 Version numbers are allocated under a PostgreSQL advisory lock. Jobs check cancellation between stages and use unique version/chunk constraints for idempotency. Retry reuses identical embeddings by workspace, content hash, model, and dimension. Stale running jobs are recovered at worker startup; stored failures contain sanitized codes/messages, not stack traces or connection strings.
 
 All document, chunk, job, retrieval-log, and RAG-tool repository methods begin with `workspace_id` predicates. Both lexical and vector branches enforce the tenant boundary before ranking, and the current-version join excludes archived, failed, processing, and stale content. This remains data isolation rather than authentication until a later module supplies trusted workspace claims.
+
+## Module 4 GitHub architecture (read-only)
+
+No new infrastructure is introduced: the integration reuses PostgreSQL (metadata, full-text, pgvector), Redis/RQ (jobs), and the workspace WebSocket. The worker now runs with the RQ scheduler enabled so rate-limited jobs can be released at the provider's reset time.
+
+### GitHub App authentication
+The provider interface (`RepositoryProvider`) exposes only `get_*`, `list_*`, and `last_rate_limit` methods; `GitHubProvider` and `FixtureProvider` implement it and nothing outside `github_provider.py` knows GitHub response shapes. `GitHubProvider` signs a 9-minute RS256 app JWT from a server-side key (environment value or file reference) and exchanges it for an installation token requesting only `contents`, `metadata`, `pull_requests`, and `deployments` at `read`. That exchange is the only non-GET request. Tokens are cached in process memory until one minute before expiry; they are never persisted, returned, or logged, and provider errors carry only status classes. Repository, owner, revision, and path arguments are validated before a URL is built, so no caller-supplied URL or revision reaches GitHub.
+
+```mermaid
+sequenceDiagram
+    participant GH as GitHub
+    participant API as FastAPI webhook route
+    participant PG as PostgreSQL
+    participant RQ as Redis / RQ
+    participant W as Worker
+    GH->>API: POST /integrations/github/webhook (raw body + headers)
+    API->>API: Size bound, then HMAC-SHA256 over raw bytes (constant time)
+    alt invalid or missing signature
+        API-->>GH: 401 (nothing stored, nothing enqueued)
+    else valid
+        API->>API: Require delivery ID and event, parse JSON, normalize documented fields
+        API->>PG: Insert delivery (unique delivery ID)
+        alt duplicate delivery
+            API-->>GH: 200 duplicate (no new work)
+        else unsupported event
+            API-->>GH: 202 ignored (recorded)
+        else supported
+            API->>RQ: Enqueue job (delivery row ID)
+            API-->>GH: 202 queued
+            RQ->>W: run_webhook_delivery
+            W->>PG: Resolve installation to workspace, apply event idempotently
+            W-->>GH: (no call back) publish repository.webhook_processed
+        end
+    end
+```
+
+### Webhook verification and queueing
+Verification precedes parsing and database access. Only selected normalized fields are stored in `github_webhook_deliveries` (never the raw payload), and the delivery ID is unique so GitHub redelivery cannot duplicate work; the single exception is a delivery whose own enqueue failed (`enqueue_failed`), which is re-enqueued. The worker maps the installation to its workspace, ignores unknown installations/repositories, and applies installation suspend/unsuspend/delete, repository add/remove, push (default branch only), pull-request, deployment, and deployment-status events idempotently.
+
+### Repository synchronization and snapshot activation
+```mermaid
+flowchart TD
+    A[Sync job / push webhook / manual reindex] --> B{Installation active?\nRepository not removed?}
+    B -- no --> X[Fail loudly: no provider call]
+    B -- yes --> C[Advisory lock per repository]
+    C --> D[Refresh metadata, commits, deployments, pull requests]
+    D --> E[Create or reuse unique snapshot for head commit]
+    E --> F[Read bounded tree and apply allow/deny policy]
+    F --> G[Fetch allowed files; skip binary, generated, oversize]
+    G --> H[Redact secrets line by line; chunk by symbol with exact lines]
+    H --> I[Reuse cached embeddings; embed the rest in batches]
+    I --> J{Limits, timeout, parse threshold,\ncancellation OK?}
+    J -- no --> K[Snapshot failed or cancelled\nprevious ready snapshot stays active]
+    J -- yes --> L[One transaction: insert files and chunks,\nsnapshot ready, switch active_snapshot_id]
+    L --> M[Prune old snapshot rows, publish events]
+```
+`repositories.active_snapshot_id` is the single activation point. Search joins it, so an unfinished, failed, cancelled, or stale snapshot can never be searched, and a failed run changes nothing visible. Snapshots are unique per (repository, commit, branch), so retries and duplicate pushes are idempotent. Incremental sync deliberately builds a new bounded snapshot at the new head instead of patching a live one: it is simpler to reason about and can never expose a half-updated index, while the content-keyed embedding cache keeps the cost of re-embedding unchanged chunks near zero.
+
+### Code chunking and retrieval
+Chunking is deterministic and works on already-redacted text whose line count equals the original's, so `start_line`/`end_line` map exactly onto the source. Python uses `ast` (parse only, never executed) for functions, classes, and methods; TypeScript/JavaScript, Go, Java/Rust, shell, Terraform, SQL, and Markdown use column-0 declaration heuristics; other text uses bounded windows. Oversized symbols split into windows with a small overlap only because a split is required, and a file that fails to parse falls back to windows and counts toward a configurable failure ratio. Chunks are de-duplicated per snapshot by content hash. The full-text vector treats identifier punctuation and camelCase boundaries as word breaks; lexical queries use OR semantics over sanitized terms bound as a parameter. Hybrid retrieval fuses lexical and cosine ranks with Reciprocal Rank Fusion (never raw scores) and optionally reranks a bounded candidate set with the Module 3 reranker abstraction. Every query repeats the workspace predicate and joins the active snapshot.
+
+### Incident-to-change correlation
+```mermaid
+flowchart LR
+    I[Incident: service, environment,\nopened time, terms from title and events] --> M[Mapped repositories\nenvironment and branch match]
+    M --> C[Commits and deployments\nin the lookback window]
+    C --> P{Inside mapped\npath prefix?}
+    P -- no --> D[Excluded]
+    P -- yes --> S[Sum bounded signal weights:\ndeploy timing, term overlap, recency,\nprefix, revert relations, environment]
+    S --> V[Apply contradicting signals:\nreverted before incident x0.3,\nfailed or other-environment deploy]
+    V --> T{Score >= minimum?}
+    T -- no --> D
+    T -- yes --> R[Rank by score, then proximity, then SHA\nconfidence category + signals + citation]
+```
+The score is a fixed, documented sum (`repositories/correlation.py`), so identical inputs always rank identically and every signal is explainable. It describes correlation only; every response and evidence item says so.
+
+### LangGraph code investigation
+```mermaid
+sequenceDiagram
+    participant G as Investigation graph
+    participant T as Code tools (read-only)
+    participant PG as PostgreSQL
+    G->>T: list_recent_changes / rank_suspect_changes / search_repository_code
+    T->>PG: Scope from trusted context: workspace, incident, service mappings
+    alt no mapping or data unavailable
+        T-->>G: Explicit observation, no evidence
+    else mapped
+        PG-->>T: Recent commits, deployments, ranked candidates, active-snapshot chunks
+        T-->>G: Evidence items: repository_commit, deployment, commit_diff, code_chunk
+    end
+    G->>T: Optional get_commit_summary / get_commit_diff / get_code_excerpt / get_pull_request_context
+    T->>PG: Revision or chunk must belong to a mapped repository of this workspace
+    G->>G: Hypotheses and report cite evidence IDs; code findings are labeled correlation
+```
+Tools call no provider, so a GitHub outage cannot fail an investigation; they read synchronized state and report data freshness (repository status, last sync, failure code). Arguments are bounded and validated; unknown or ambiguous revisions, unmapped repositories, and other workspaces' chunks become rejected observations rather than errors or leaks. Source text, commit messages, and diffs are untrusted evidence and cannot alter tool policy or system instructions.
+
+### Rate limits and failure handling
+`ProviderRateLimitError` carries a retry delay derived from `Retry-After` or the rate-limit reset header. Jobs reschedule themselves with the RQ scheduler (bounded by `REPO_RATE_LIMIT_MAX_RETRIES`; transient outages use exponential backoff), the repository is marked `failed` with a sanitized code while its last ready snapshot stays searchable, and the last observed rate-limit headers are stored on the installation without credentials. Authentication failures are not retried. Stale `indexing`/`syncing` work left by a crashed worker is failed at worker startup.

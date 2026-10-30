@@ -25,6 +25,7 @@ from opspilot_api.middleware import (
     CorrelationIdMiddleware,
     EventPayloadLimitMiddleware,
 )
+from opspilot_api.repositories.router import router as repositories_router
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[CORRELATION_HEADER, "Content-Type", "Idempotency-Key"],
         expose_headers=[CORRELATION_HEADER],
     )
@@ -70,4 +71,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(incidents_router)
     app.include_router(investigations_router)
     app.include_router(knowledge_router)
+    app.include_router(repositories_router)
     return app

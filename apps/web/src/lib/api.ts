@@ -74,7 +74,82 @@ const retrievalVariantSchema = z.enum(["lexical", "vector", "hybrid_rrf", "hybri
 export const knowledgeSearchSchema = z.object({results: z.array(z.object({chunk_id: z.string().uuid(), document_id: z.string().uuid(), document_version_id: z.string().uuid(), document_title: z.string(), document_type: documentTypeSchema, service_id: z.string().uuid().nullable(), service_name: z.string().nullable(), heading_path: z.array(z.string()), page_number: z.number().nullable(), excerpt: z.string(), lexical_rank: z.number().nullable(), lexical_score: z.number().nullable(), vector_rank: z.number().nullable(), vector_score: z.number().nullable(), rrf_score: z.number().nullable(), rerank_score: z.number().nullable(), citation_label: z.string()})), diagnostics: z.object({variant: retrievalVariantSchema, candidate_count: z.number(), latency_ms: z.number(), embedding_latency_ms: z.number().nullable(), rerank_latency_ms: z.number().nullable(), rerank_fallback_used: z.boolean(), low_relevance: z.boolean()})});
 const queuedKnowledgeSchema = z.object({document_id: z.string().uuid(), version_id: z.string().uuid(), job_id: z.string().uuid(), status: z.literal("queued")});
 
+export const installationStatusSchema = z.enum(["active", "suspended", "removed"]);
+export const repositoryStatusSchema = z.enum(["active", "syncing", "failed", "removed", "archived"]);
+export const snapshotStatusSchema = z.enum(["queued", "indexing", "ready", "failed", "cancelled"]);
+export const codeVariantSchema = z.enum(["lexical", "vector", "hybrid_rrf", "hybrid_rrf_rerank"]);
+export const installationSchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), provider_installation_id: z.number(), account_login: z.string(), account_type: z.string(),
+  status: installationStatusSchema, repository_selection: z.string(), permissions: z.record(z.string(), z.unknown()), rate_limit: z.record(z.string(), z.unknown()),
+  installed_at: z.string(), suspended_at: z.string().nullable(), removed_at: z.string().nullable(), updated_at: z.string(),
+  repository_count: z.number(), last_synced_at: z.string().nullable(),
+});
+export const installationListSchema = z.object({provider: z.string(), provider_configured: z.boolean(), configuration_hint: z.string().nullable(), installations: z.array(installationSchema)});
+export const snapshotSchema = z.object({
+  id: z.string().uuid(), commit_sha: z.string(), branch: z.string(), status: snapshotStatusSchema, file_count: z.number(), chunk_count: z.number(),
+  stats: z.record(z.string(), z.unknown()), started_at: z.string().nullable(), completed_at: z.string().nullable(), failed_at: z.string().nullable(),
+  failure_code: z.string().nullable(), failure_message: z.string().nullable(), created_at: z.string(),
+});
+export const mappedServiceSchema = z.object({mapping_id: z.string().uuid(), service_id: z.string().uuid(), service_name: z.string(), environment: environmentSchema, branch_pattern: z.string(), path_prefix: z.string().nullable()});
+export const repositorySummarySchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), github_installation_id: z.string().uuid(), provider_repository_id: z.number(), owner: z.string(), name: z.string(),
+  full_name: z.string(), default_branch: z.string(), is_private: z.boolean(), is_archived: z.boolean(), status: repositoryStatusSchema,
+  failure_code: z.string().nullable(), failure_message: z.string().nullable(), last_synced_at: z.string().nullable(), updated_at: z.string(),
+  active_snapshot: snapshotSchema.nullable().default(null), connected_services: z.array(mappedServiceSchema).default([]),
+});
+export const repositoryDetailSchema = repositorySummarySchema.extend({recent_snapshots: z.array(snapshotSchema).default([]), commit_count: z.number().default(0), deployment_count: z.number().default(0)});
+export const queuedSchema = z.object({status: z.string(), detail: z.string().nullable().default(null), installation_id: z.string().uuid().nullable().default(null), repository_id: z.string().uuid().nullable().default(null), snapshot_id: z.string().uuid().nullable().default(null)});
+export const mappingSchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), service_id: z.string().uuid(), repository_id: z.string().uuid(), repository_full_name: z.string(),
+  environment: environmentSchema, branch_pattern: z.string(), path_prefix: z.string().nullable(), created_at: z.string(), updated_at: z.string(),
+});
+export const codeSearchResultSchema = z.object({
+  chunk_id: z.string().uuid(), repository_id: z.string().uuid(), repository_full_name: z.string(), snapshot_id: z.string().uuid(), commit_sha: z.string(), branch: z.string(),
+  path: z.string(), language: z.string().nullable(), symbol_name: z.string().nullable(), symbol_type: z.string().nullable(), start_line: z.number(), end_line: z.number(), excerpt: z.string(),
+  lexical_rank: z.number().nullable().default(null), lexical_score: z.number().nullable().default(null), vector_rank: z.number().nullable().default(null), vector_score: z.number().nullable().default(null),
+  rrf_score: z.number().nullable().default(null), rerank_score: z.number().nullable().default(null), citation_label: z.string(),
+});
+export const codeSearchSchema = z.object({
+  results: z.array(codeSearchResultSchema),
+  diagnostics: z.object({variant: codeVariantSchema, candidate_count: z.number(), latency_ms: z.number(), embedding_latency_ms: z.number().nullable(), rerank_latency_ms: z.number().nullable(), rerank_fallback_used: z.boolean(), low_relevance: z.boolean()}),
+});
+export const commitSchema = z.object({
+  id: z.string().uuid(), repository_id: z.string().uuid(), repository_full_name: z.string(), sha: z.string(), author_name: z.string().nullable(), message: z.string(),
+  committed_at: z.string(), changed_files: z.number(), additions: z.number(), deletions: z.number(), provider_url: z.string(),
+  files: z.array(z.object({path: z.string(), previous_path: z.string().nullable(), change_type: z.string(), additions: z.number(), deletions: z.number()})).default([]),
+});
+export const deploymentSchema = z.object({
+  id: z.string().uuid(), repository_id: z.string().uuid(), repository_full_name: z.string(), provider_deployment_id: z.number(), commit_sha: z.string(), environment: z.string(),
+  status: z.string(), description: z.string().nullable(), deployed_at: z.string().nullable(), completed_at: z.string().nullable(),
+});
+export const suspectChangeSchema = z.object({
+  kind: z.string(), repository_id: z.string().uuid(), repository_full_name: z.string(), commit_sha: z.string(), commit_id: z.string().uuid().nullable(), deployment_id: z.string().uuid().nullable(),
+  title: z.string(), score: z.number(), confidence: z.string(), matched_signals: z.array(z.string()), contradicting_signals: z.array(z.string()), minutes_before_incident: z.number(),
+  changed_files: z.array(z.string()), environment: z.string().nullable(), citation_label: z.string(),
+});
+export const suspectChangesSchema = z.object({
+  incident_id: z.string().uuid(), opened_at: z.string(), service_id: z.string().uuid().nullable(), has_repository_mapping: z.boolean(),
+  candidates: z.array(suspectChangeSchema), deployments: z.array(deploymentSchema), code_excerpts: z.array(codeSearchResultSchema), notice: z.string(),
+});
+export const repositoryProgressSchema = z.object({
+  repository_id: z.string().uuid().optional(), installation_id: z.string().uuid().optional(), snapshot_id: z.string().uuid().optional(), status: z.string().optional(), stage: z.string().optional(),
+  files_processed: z.number().optional(), total_files: z.number().optional(), chunks_processed: z.number().optional(), failure_code: z.string().optional(),
+});
+
 export type Workspace = z.infer<typeof workspaceSchema>;
+export type InstallationList = z.infer<typeof installationListSchema>;
+export type Installation = z.infer<typeof installationSchema>;
+export type RepositorySummary = z.infer<typeof repositorySummarySchema>;
+export type RepositoryDetail = z.infer<typeof repositoryDetailSchema>;
+export type Snapshot = z.infer<typeof snapshotSchema>;
+export type Mapping = z.infer<typeof mappingSchema>;
+export type CodeSearch = z.infer<typeof codeSearchSchema>;
+export type CodeSearchResult = z.infer<typeof codeSearchResultSchema>;
+export type CodeVariant = z.infer<typeof codeVariantSchema>;
+export type SuspectChanges = z.infer<typeof suspectChangesSchema>;
+export type RepositoryProgress = z.infer<typeof repositoryProgressSchema>;
+export type CodeSearchRequest = {query: string; repository_id?: string; service_id?: string; environment?: Environment; branch?: string; path_prefix?: string; language?: string; symbol_type?: string; variant: CodeVariant; candidate_count: number; top_k: number};
+export type MappingCreate = {repository_id: string; environment: Environment; branch_pattern: string; path_prefix: string | null};
 export type Service = z.infer<typeof serviceSchema>;
 export type Incident = z.infer<typeof incidentSchema>;
 export type Severity = z.infer<typeof severitySchema>;
@@ -105,6 +180,18 @@ async function request<T>(baseUrl: string, path: string, schema: z.ZodType<T>, i
     throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
   }
   return schema.parse(body);
+}
+
+async function requestEmpty(baseUrl: string, path: string, init: RequestInit): Promise<void> {
+  const response = await fetch(`${baseUrl}${path}`, {...init, headers: {"Content-Type": "application/json", ...init.headers}});
+  if (response.ok) return;
+  const body: unknown = await response.json().catch(() => null);
+  const parsed = z.object({error: z.object({message: z.string()})}).safeParse(body);
+  throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
+}
+
+export function isProviderUnavailable(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 502 || error.status === 503);
 }
 
 async function multipartRequest<T>(baseUrl: string, path: string, schema: z.ZodType<T>, body: FormData): Promise<T> {
@@ -142,4 +229,17 @@ export const api = {
   reindexKnowledgeDocument: (baseUrl: string, workspaceId: string, documentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents/${documentId}/reindex`, knowledgeJobSchema, {method: "POST"}),
   archiveKnowledgeDocument: (baseUrl: string, workspaceId: string, documentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/documents/${documentId}/archive`, z.object({document_id: z.string().uuid(), status: knowledgeStatusSchema}), {method: "POST"}),
   knowledgeSearch: (baseUrl: string, workspaceId: string, data: {query: string; service_id?: string; document_types: DocumentType[]; variant: RetrievalVariant; top_k: number; candidate_count: number}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/knowledge/search`, knowledgeSearchSchema, {method: "POST", body: JSON.stringify(data)}),
+  githubInstallations: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/integrations/github/installations`, installationListSchema),
+  syncInstallation: (baseUrl: string, workspaceId: string, providerInstallationId: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/integrations/github/installations/sync`, queuedSchema, {method: "POST", body: JSON.stringify({provider_installation_id: providerInstallationId})}),
+  repositories: (baseUrl: string, workspaceId: string, query = new URLSearchParams()) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories?${query}`, z.array(repositorySummarySchema)),
+  repository: (baseUrl: string, workspaceId: string, repositoryId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/${repositoryId}`, repositoryDetailSchema),
+  syncRepository: (baseUrl: string, workspaceId: string, repositoryId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/${repositoryId}/sync`, queuedSchema, {method: "POST"}),
+  reindexRepository: (baseUrl: string, workspaceId: string, repositoryId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/${repositoryId}/reindex`, queuedSchema, {method: "POST"}),
+  repositoryCommits: (baseUrl: string, workspaceId: string, repositoryId: string, limit = 10) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/${repositoryId}/commits?limit=${limit}`, z.array(commitSchema)),
+  repositoryDeployments: (baseUrl: string, workspaceId: string, repositoryId: string, limit = 10) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/${repositoryId}/deployments?limit=${limit}`, z.array(deploymentSchema)),
+  serviceMappings: (baseUrl: string, workspaceId: string, serviceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/services/${serviceId}/repositories`, z.array(mappingSchema)),
+  createMapping: (baseUrl: string, workspaceId: string, serviceId: string, data: MappingCreate) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/services/${serviceId}/repositories`, mappingSchema, {method: "POST", body: JSON.stringify(data)}),
+  deleteMapping: (baseUrl: string, workspaceId: string, serviceId: string, mappingId: string) => requestEmpty(baseUrl, `/api/v1/workspaces/${workspaceId}/services/${serviceId}/repositories/${mappingId}`, {method: "DELETE"}),
+  codeSearch: (baseUrl: string, workspaceId: string, data: CodeSearchRequest) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/repositories/search`, codeSearchSchema, {method: "POST", body: JSON.stringify(data)}),
+  suspectChanges: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/suspect-changes`, suspectChangesSchema),
 };
