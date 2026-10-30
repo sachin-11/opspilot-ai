@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from opspilot_api.config import Settings, get_settings
 from opspilot_api.infrastructure import create_db_engine, create_session_factory
 from opspilot_api.investigations.service import recover_stale_investigations
+from opspilot_api.knowledge.service import recover_stale_jobs
 from opspilot_api.logging_config import configure_logging
 
 logger = logging.getLogger("opspilot_api.worker")
@@ -47,13 +48,15 @@ def log_job_failure(
     return True
 
 
-async def recover_stale_work(settings: Settings) -> int:
+async def recover_stale_work(settings: Settings) -> tuple[int, int]:
     """Fail abandoned running investigations before accepting new jobs."""
     engine = create_db_engine(settings)
     try:
         session_factory = create_session_factory(engine)
         async with session_factory() as session:
-            return await recover_stale_investigations(session, settings)
+            investigations = await recover_stale_investigations(session, settings)
+            ingestion_jobs = await recover_stale_jobs(session, settings)
+            return investigations, ingestion_jobs
     finally:
         await engine.dispose()
 
@@ -62,7 +65,7 @@ def main() -> None:
     settings = get_settings()
     configure_logging(settings.LOG_LEVEL.value)
     try:
-        recovered = asyncio.run(recover_stale_work(settings))
+        recovered_investigations, recovered_ingestions = asyncio.run(recover_stale_work(settings))
     except SQLAlchemyError as exc:
         # On the first boot Compose starts the worker before Alembic creates the
         # investigation tables. Recovery is retried on the next worker start.
@@ -71,8 +74,16 @@ def main() -> None:
             extra={"error_class": type(exc).__name__},
         )
     else:
-        if recovered:
-            logger.warning("stale investigations recovered", extra={"count": recovered})
+        if recovered_investigations:
+            logger.warning(
+                "stale investigations recovered",
+                extra={"count": recovered_investigations},
+            )
+        if recovered_ingestions:
+            logger.warning(
+                "stale knowledge ingestions recovered",
+                extra={"count": recovered_ingestions},
+            )
     connection = create_redis(settings)
     worker = Worker(
         QUEUES,

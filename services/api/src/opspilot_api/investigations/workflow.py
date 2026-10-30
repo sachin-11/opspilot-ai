@@ -406,7 +406,10 @@ class WorkflowRuntime:
                 plan = InvestigationPlan.model_validate(state["plan"])
                 self._check_limits(session, investigation, len(plan.tool_requests))
                 context = ToolContext(
-                    workspace_id=investigation.workspace_id, incident_id=investigation.incident_id
+                    workspace_id=investigation.workspace_id,
+                    incident_id=investigation.incident_id,
+                    investigation_id=investigation.id,
+                    settings=self.settings,
                 )
                 evidence_ids: list[str] = []
                 observations: list[dict[str, Any]] = []

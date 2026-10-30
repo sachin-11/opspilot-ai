@@ -79,6 +79,11 @@ jobs:
       AI_PRIMARY_PROVIDER: fake
       AI_PRIMARY_MODEL: deterministic-v1
       LANGGRAPH_STRICT_MSGPACK: "true"
+      KNOWLEDGE_STORAGE_ROOT: /tmp/opspilot-knowledge
+      EMBEDDING_PROVIDER: fake
+      EMBEDDING_MODEL: hash-bow-v1
+      EMBEDDING_DIMENSIONS: "64"
+      RERANK_PROVIDER: fake
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -99,6 +104,12 @@ jobs:
         run: uv run alembic downgrade 0001 && uv run alembic upgrade head
       - name: Integration tests (live PostgreSQL + Redis)
         run: uv run pytest -m integration
+      - name: Deterministic retrieval evaluation
+        run: >-
+          uv run python -m opspilot_api.knowledge.evaluation
+          --dataset tests/fixtures/retrieval_evaluation.json
+          --json-output retrieval-evaluation.json
+          --markdown-output retrieval-evaluation.md
 
   compose:
     name: Docker Compose config

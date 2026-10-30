@@ -1,14 +1,14 @@
 # OpsPilot AI
 
-OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 2: the human-reviewed AI investigation engine**, built on the Module 0/1 foundation.
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 3: the operational knowledge and retrieval system**, built on the Module 0–2 foundation.
 
-## Module 2 capabilities
+## Module 3 capabilities
 
-Included: the complete Module 1 incident core plus RQ-executed LangGraph investigations, PostgreSQL checkpoints, typed read-only tools, redacted and deduplicated evidence, structured hypotheses/reports, retryable-only provider fallback, usage/cost circuit breakers, human approval/revision/rejection, stale-worker recovery, real-time progress, and an incident-detail investigation UI.
+Included: the incident and human-reviewed investigation flows plus private text/Markdown/text-PDF ingestion, atomic document versions, deterministic redacted chunks, PostgreSQL full-text and pgvector search, hybrid RRF, optional reranking, citations, evaluation tooling, safe investigation RAG tools, real-time progress, and knowledge-management UI.
 
 ### Intentionally deferred to later modules
 
-RAG/runbook embeddings, GitHub/code access, AWS/CloudWatch, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation shown by Module 2 is advisory only; OpsPilot never executes production changes.**
+GitHub/code indexing, OCR, DOCX, web scraping, AWS/CloudWatch ingestion, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation remains advisory; OpsPilot never executes production changes.**
 
 ## Architecture
 
@@ -141,9 +141,38 @@ The first request returns `result: "created"`; a related event with a new key re
 
 Connect to `ws://localhost:8300/api/v1/ws/workspaces/{workspace_id}/incidents`. Messages use a typed envelope containing `event_id`, `type`, `workspace_id`, `incident_id`, `occurred_at`, and `data`. The client sends `ping`, reconnects with capped exponential backoff, and keeps REST usable while Redis/WebSocket connectivity is degraded.
 
+## Operational knowledge
+
+The knowledge UI at `/knowledge` accepts direct plain text/Markdown or `.txt`, `.md`, and text-based `.pdf` files up to the configured bound. Executables, archives, encrypted PDFs, image-only PDFs, unsupported binaries, oversized files, and empty extraction results are rejected. The API stores the unchanged private original, while only redacted extracted chunks are embedded and indexed.
+
+Uploads return HTTP 202 and RQ performs extraction, redaction, deterministic structure-aware chunking, batched embedding, transactional chunk insertion, and the atomic current-version switch. A failed or cancelled replacement never displaces the last ready version. Reindex creates a new version from the stored original; archive is soft and immediately excludes every version from retrieval.
+
+Local development uses `KNOWLEDGE_STORAGE_BACKEND=local` and `KNOWLEDGE_STORAGE_ROOT=./.data/knowledge` on the host, or the private `knowledge_data` Compose volume at `/app/data/knowledge`. Storage keys are generated, never public, and an S3-compatible adapter boundary is available for deployment integration. Local originals are **not application-encrypted**; rely on host/volume encryption and access controls.
+
+Embeddings default to deterministic `EMBEDDING_PROVIDER=fake`, `EMBEDDING_MODEL=hash-bow-v1`, and the schema-fixed 64 dimensions. Changing dimensions requires a migration and reindex. Production adapters use the same bounded batching/retry interface and must be implemented before selecting them. Reranking is optional and falls back to RRF only on retryable failures.
+
+Search variants are `lexical` (PostgreSQL FTS), `vector` (pgvector cosine), `hybrid_rrf` (rank-only fusion), and `hybrid_rrf_rerank` (bounded fake/adapter rerank). Every result identifies the current ready chunk and includes a stable citation. Candidate queries contain the workspace predicate before ranking; archived, failed, and stale versions cannot enter a candidate set.
+
+```bash
+curl -X POST http://localhost:8300/api/v1/workspaces/WORKSPACE_ID/knowledge/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"checkout database connection exhaustion","document_types":["runbook"],"variant":"hybrid_rrf","candidate_count":20,"top_k":5}'
+```
+
+Run the deterministic 20-query PostgreSQL/pgvector evaluation after exporting `.env` values:
+
+```bash
+cd services/api
+uv run python -m opspilot_api.knowledge.evaluation --dataset tests/fixtures/retrieval_evaluation.json --json-output retrieval-evaluation.json --markdown-output retrieval-evaluation.md
+```
+
+**Experimental query enhancement.** `hybrid_rrf_rewrite` and `hybrid_rrf_hyde` use the Module 2 model-provider router to rewrite the query or generate a hypothetical passage (HyDE). They are rejected (HTTP 422) unless `KNOWLEDGE_EXPERIMENTAL_QUERY_ENHANCEMENT=true`, make at most one bounded call (`KNOWLEDGE_ENHANCEMENT_TIMEOUT_SECONDS`, `_MAX_OUTPUT_TOKENS`, `_MAX_COST_USD`), fail loudly rather than silently falling back, and are marked `experimental` in diagnostics and `RetrievalLog.filters`. They are API/evaluation-only (not in the UI selector), never used by the investigation tool, and reported in a separate evaluation section with the fake provider.
+
+The command compares all four baseline variants and fails on fixture-baseline regression, missing citations, or any cross-workspace leakage. It reports Recall@1/3/5, MRR, NDCG@5, no-answer behavior, P50/P95 latency, and leakage. The fake provider is a deterministic test/demo baseline, not a claim about production semantic quality.
+
 ## Current security boundary
 
-Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated. Do not expose this build as a production-secure multi-tenant service. Evidence is bounded and common secret forms are redacted, but this is defense in depth rather than a complete DLP system. Incident/log content remains untrusted. Hidden chain-of-thought and full prompts are neither stored nor returned; only structured outputs, evidence references, concise summaries, and safe errors are persisted.
+Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated. Do not expose this build as a production-secure multi-tenant service. Evidence and knowledge chunks are bounded and common secret forms are redacted, but this is defense in depth rather than complete DLP. Uploaded originals remain unredacted in private storage and local storage is not encrypted by the application. Incident/log/document content remains untrusted. Hidden chain-of-thought and full prompts are neither stored nor returned; only structured outputs, evidence references, concise summaries, and safe errors are persisted.
 
 ## Tests and quality checks
 

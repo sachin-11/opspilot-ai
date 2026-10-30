@@ -56,6 +56,16 @@ flowchart LR
 
 There is one team-sized domain and no independent scaling, deployment cadence, or data-ownership boundary yet. Microservices would add network failure modes, distributed tracing/versioning, and operational cost with no benefit. The API and worker already deploy separately from one codebase; if a module later needs independent scaling or isolation, it can be split along its existing package boundary.
 
+## Module 3 infrastructure requirement
+
+Module 3 accepts private operational files, so local development needs one durable, non-public
+filesystem location shared by the API and worker. Docker Compose therefore adds a named
+`knowledge_data` volume mounted at `/app/data/knowledge`; no new service, database, queue, or
+network endpoint is introduced. PostgreSQL remains the metadata, full-text, vector, and citation
+system of record. The filesystem abstraction keeps generated storage keys separate from user
+filenames and leaves an S3-compatible implementation as a deployment adapter rather than a local
+dependency.
+
 ## Module 1 data and isolation
 
 `Workspace` is the future tenant boundary. Every service, incident, timeline, and ingested-event query includes `workspace_id`; nested resources return 404 when the resource exists in a different workspace. A composite service constraint allows the same slug in different workspaces. An incident can only reference a service found by `(workspace_id, service_id)`.
@@ -196,3 +206,88 @@ Input/output prices are configuration, not model-name assumptions. Limits are ch
 Every internal tool validates typed, bounded inputs and repeats workspace/incident predicates internally. Tools are read-only and have no shell, filesystem, arbitrary SQL, or unrestricted network capability. Results are redacted before model use and persistence, truncated to configured bounds, and deduplicated by a stable SHA-256 content hash. Hypotheses and report claims are rejected if they cite IDs not present in that investigation.
 
 Hidden reasoning is intentionally absent from graph state, database rows, API schemas, logs, WebSocket messages, and UI. Persisting it would enlarge the sensitive-data surface without improving reviewability. Human review instead receives inspectable evidence, structured hypotheses, citations, confidence, assumptions, concise step summaries, and the advisory plan.
+
+## Module 3 knowledge architecture
+
+PostgreSQL is already the tenant-scoped system of record and supports transactional FTS plus pgvector. Keeping metadata, current-version selection, lexical candidates, vector candidates, citations, and retrieval logs in one database makes atomic replacement and workspace predicates auditable. A separate vector database would add replication, consistency, tenancy, backup, and failure modes without a demonstrated scale requirement.
+
+```mermaid
+sequenceDiagram
+    participant Web
+    participant API
+    participant Store as Private object storage
+    participant RQ
+    participant Worker
+    participant PG as PostgreSQL + pgvector
+    Web->>API: Upload file or direct content
+    API->>PG: Validate workspace/service; create version + queued job
+    API->>Store: Atomic original write under generated key
+    API->>RQ: Enqueue stable job ID
+    API-->>Web: 202 queued
+    RQ->>Worker: Ingestion job
+    Worker->>Store: Read and verify hash
+    Worker->>Worker: Extract, normalize, redact, deterministic chunk
+    Worker->>Worker: Reuse/cache or batch embeddings
+    Worker->>PG: Transactionally replace version chunks
+    Worker->>PG: Mark ready + atomically switch current_version_id
+    Worker-->>Web: Concise workspace WebSocket events
+```
+
+Markdown heading hierarchy, paragraph boundaries, PDF pages, and offsets are preserved. Heading context is included in redacted chunk text so lexical search remains structure-aware. Large blocks use deterministic token windows with bounded overlap; content hashes make repeated inputs and embedding cache keys stable. The original object is never silently rewritten.
+
+```mermaid
+flowchart LR
+    Q[Validated scoped query] --> L[FTS candidates<br/>workspace + current ready filters]
+    Q --> E[Fake/production embedding]
+    E --> V[Cosine candidates<br/>workspace + model/dimension + current ready filters]
+    L --> R[RRF by component ranks]
+    V --> R
+    R --> O{Rerank selected?}
+    O -->|no| C[Relevance gate + top K]
+    O -->|yes| B[Bounded reranker]
+    B -->|success| C
+    B -->|retryable failure| R
+    C --> S[Stable citations + safe diagnostics + retrieval log]
+```
+
+Lexical and cosine scores are retained for diagnostics but never numerically mixed. RRF combines ranks and deduplicates chunk IDs. Variant-specific relevance gates allow an explicit no-useful-result response. Reranker authentication/configuration errors fail loudly; only retryable availability failures fall back to RRF.
+
+```mermaid
+sequenceDiagram
+    participant Graph as Investigation graph
+    participant Tool as search_runbooks tool
+    participant Retrieval
+    participant PG
+    Graph->>Tool: Typed query, service, types, top K
+    Tool->>Retrieval: Workspace + investigation IDs
+    Retrieval->>PG: Scoped hybrid candidate queries
+    PG-->>Retrieval: Current ready chunks only
+    Retrieval-->>Tool: Bounded excerpts, scores, citations
+    Tool-->>Graph: Knowledge evidence or no-useful-runbook observation
+    Graph->>Tool: Optional get_knowledge_chunk scoped by workspace
+    Tool-->>Graph: Untrusted EvidenceItem referencing chunk ID
+```
+
+Retrieved text is evidence data, never policy or system instruction. The graph may cite it but cannot use it to expand tool permissions. Retrieval unavailability or low relevance produces a bounded observation and does not by itself fail an otherwise valid investigation.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Uploaded
+    Uploaded --> Extracting
+    Extracting --> Chunking
+    Chunking --> Embedding
+    Embedding --> Ready
+    Uploaded --> Failed
+    Extracting --> Failed
+    Chunking --> Failed
+    Embedding --> Failed
+    Ready --> Current: atomic switch after all chunks persist
+    Failed --> PriorCurrent: prior ready version remains selected
+    Current --> ReplacementUploaded: new upload/reindex
+    ReplacementUploaded --> Current: replacement fails or is cancelled
+    ReplacementUploaded --> NewCurrent: replacement becomes fully ready
+```
+
+Version numbers are allocated under a PostgreSQL advisory lock. Jobs check cancellation between stages and use unique version/chunk constraints for idempotency. Retry reuses identical embeddings by workspace, content hash, model, and dimension. Stale running jobs are recovered at worker startup; stored failures contain sanitized codes/messages, not stack traces or connection strings.
+
+All document, chunk, job, retrieval-log, and RAG-tool repository methods begin with `workspace_id` predicates. Both lexical and vector branches enforce the tenant boundary before ranking, and the current-version join excludes archived, failed, processing, and stale content. This remains data isolation rather than authentication until a later module supplies trusted workspace claims.

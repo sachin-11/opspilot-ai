@@ -26,3 +26,7 @@ next-env.d.ts
 .idea/
 .DS_Store
 Thumbs.db
+
+# Generated retrieval evaluation output
+services/api/retrieval-evaluation*.json
+services/api/retrieval-evaluation*.md

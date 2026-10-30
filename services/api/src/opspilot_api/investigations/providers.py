@@ -20,6 +20,7 @@ from opspilot_api.investigations.schemas import (
     TriageResult,
     UsageInfo,
 )
+from opspilot_api.knowledge.schemas import HydePassage, QueryRewrite
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
@@ -86,14 +87,27 @@ class FakeProvider(ModelProvider):
                 evidence_needed=["incident timeline", "correlated events"],
             )
         elif schema is InvestigationPlan:
+            incident = context.get("incident", {})
+            query = " ".join(
+                str(incident.get(key) or "") for key in ("title", "description")
+            ).strip()
             data = InvestigationPlan(
-                objective="Collect bounded incident, timeline, and event evidence.",
+                objective="Collect bounded incident, event, and relevant runbook evidence.",
                 tool_requests=[
                     ToolRequest(tool_name="get_incident_context"),
                     ToolRequest(tool_name="get_incident_timeline", arguments={"limit": 50}),
                     ToolRequest(tool_name="search_ingested_events", arguments={"limit": 50}),
                     ToolRequest(tool_name="summarize_event_frequency"),
                     ToolRequest(tool_name="compare_incident_windows"),
+                    ToolRequest(
+                        tool_name="search_runbooks",
+                        arguments={
+                            "query": query or "incident troubleshooting",
+                            "service_id": incident.get("service_id"),
+                            "document_types": ["runbook", "troubleshooting"],
+                            "top_k": 3,
+                        },
+                    ),
                 ],
             )
         elif schema is HypothesisSet:
@@ -148,6 +162,14 @@ class FakeProvider(ModelProvider):
                 verification_plan=[step],
                 unknowns_and_assumptions=["No external telemetry was queried."],
                 abstained=insufficient,
+            )
+        elif schema is QueryRewrite:
+            words = [w for w in str(context.get("query", "")).split() if len(w) > 3]
+            data = QueryRewrite(query=" ".join(words[:20]) or "troubleshooting")
+        elif schema is HydePassage:
+            data = HydePassage(
+                passage=f"Runbook procedure for: {str(context.get('query', ''))[:400]}. "
+                "Check dashboards, inspect logs, and follow the documented recovery steps."
             )
         else:
             raise ProviderConfigurationError(f"fake provider has no fixture for {schema.__name__}")
