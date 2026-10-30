@@ -6,13 +6,13 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from opspilot_api.config import get_settings
+from opspilot_api.incidents.models import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# No business tables exist yet, so there is no model metadata to autogenerate against.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

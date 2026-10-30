@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from opspilot_api.incidents.service import DomainError
 from opspilot_api.logging_config import correlation_id_var
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,10 @@ def _response(request: Request, status_code: int, code: str, message: str) -> JS
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(DomainError)
+    async def domain_error(request: Request, exc: DomainError) -> JSONResponse:
+        return _response(request, exc.status_code, exc.code, str(exc))
+
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code = HTTPStatus(exc.status_code).phrase.lower().replace(" ", "_")

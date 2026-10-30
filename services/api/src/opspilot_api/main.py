@@ -11,9 +11,18 @@ from opspilot_api import v1
 from opspilot_api.config import APP_NAME, APP_VERSION, Settings, get_settings
 from opspilot_api.errors import register_exception_handlers
 from opspilot_api.health.router import router as health_router
-from opspilot_api.infrastructure import create_db_engine, create_redis_client
+from opspilot_api.incidents.router import router as incidents_router
+from opspilot_api.infrastructure import (
+    create_db_engine,
+    create_redis_client,
+    create_session_factory,
+)
 from opspilot_api.logging_config import configure_logging
-from opspilot_api.middleware import CORRELATION_HEADER, CorrelationIdMiddleware
+from opspilot_api.middleware import (
+    CORRELATION_HEADER,
+    CorrelationIdMiddleware,
+    EventPayloadLimitMiddleware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +31,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.db_engine = create_db_engine(settings)
+    app.state.session_factory = create_session_factory(app.state.db_engine)
     app.state.redis = create_redis_client(settings)
     logger.info(
         "api starting",
@@ -45,13 +55,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
-        allow_methods=["GET"],
-        allow_headers=[CORRELATION_HEADER],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=[CORRELATION_HEADER, "Content-Type", "Idempotency-Key"],
         expose_headers=[CORRELATION_HEADER],
     )
+    app.add_middleware(EventPayloadLimitMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
 
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(v1.router)
+    app.include_router(incidents_router)
     return app

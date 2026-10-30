@@ -1,14 +1,14 @@
 # OpsPilot AI
 
-OpsPilot AI is planned as a multi-tenant, autonomous incident-response platform. This repository currently contains **Module 0: the foundation** only.
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 1: the incident-management core**, built on the Module 0 foundation.
 
-## Module 0 scope
+## Module 1 capabilities
 
-Included: monorepo layout, FastAPI API (`/health/live`, `/health/ready`, `/api/v1/meta`), RQ worker with a `ping` smoke job, PostgreSQL + pgvector (extension enabled via Alembic), Redis, a Next.js status dashboard, Docker Compose, quality tooling, GitHub Actions CI, and documentation.
+Included: workspaces, monitored services, manual incidents, status/severity transitions, optimistic concurrency, append-only timelines, notes, deterministic event ingestion and deduplication, cursor pagination and filters, Redis Pub/Sub WebSockets, an operational Next.js dashboard, and an idempotent development seed. Module 0 health endpoints, RQ worker, PostgreSQL + pgvector, Docker Compose, tests, and CI remain intact.
 
 ### Intentionally deferred to later modules
 
-AI agents, LangGraph workflows, GitHub integration, authentication/authorization, incident management, tenants/users and any business tables, billing, Kafka, AWS/cloud deployment, navigation/incident UI.
+AI agents, LangGraph/LLM/RAG workflows, fuzzy correlation, GitHub/AWS integrations, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation.
 
 ## Architecture
 
@@ -86,6 +86,44 @@ scripts\migrate.ps1
 
 Migration `0001` runs `CREATE EXTENSION IF NOT EXISTS vector`. Verify:
 `docker compose exec postgres psql -U opspilot -d opspilot -c "\dx vector"`.
+
+Migration `0002` creates the Module 1 workspace, service, incident, timeline, and ingested-event tables with tenant-scoped constraints and indexes. Validate reversibility on a disposable database with:
+
+```bash
+docker compose exec api alembic downgrade 0001
+docker compose exec api alembic upgrade head
+```
+
+## Demo seed and local flow
+
+The seed is disabled when `APP_ENV=production` and is safe to run repeatedly:
+
+```bash
+docker compose exec api python -m opspilot_api.incidents.seed
+```
+
+Open http://localhost:3300, create a manual incident, move it through a valid status transition, change severity, and add a timeline note. The UI uses REST as its source of truth and refreshes affected TanStack Query caches from workspace-scoped WebSocket events.
+
+## Event ingestion
+
+Every submission requires an `Idempotency-Key`. Matching is deterministic: SHA-256 over normalized workspace ID, service ID, event type, and error signature. Raw summaries are deliberately excluded because timestamps and request IDs make them unstable.
+
+```bash
+curl -X POST http://localhost:8300/api/v1/workspaces/WORKSPACE_ID/events \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: demo-alert-123" \
+  -d '{"service_id":"SERVICE_ID","external_id":"alert-123","source":"demo-monitor","event_type":"http_error_rate","severity":"sev2","summary":"Checkout API 5xx rate exceeded threshold","error_signature":"checkout.http.5xx","attributes":{"error_rate":0.18,"threshold":0.05,"region":"ap-south-1"},"occurred_at":"2026-10-30T10:00:00Z"}'
+```
+
+The first request returns `result: "created"`; a related event with a new key returns `"correlated"`; replaying the same key returns the original event and outcome without writing duplicates.
+
+## Real-time endpoint
+
+Connect to `ws://localhost:8300/api/v1/ws/workspaces/{workspace_id}/incidents`. Messages use a typed envelope containing `event_id`, `type`, `workspace_id`, `incident_id`, `occurred_at`, and `data`. The client sends `ping`, reconnects with capped exponential backoff, and keeps REST usable while Redis/WebSocket connectivity is degraded.
+
+## Current security boundary
+
+Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated in Module 1. Do not expose this build as a production-secure multi-tenant service; authenticated workspace claims and authorization belong to a later module. Event attributes reject credential-like keys and payloads above 64 KiB.
 
 ## Tests and quality checks
 

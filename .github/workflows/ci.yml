@@ -90,6 +90,8 @@ jobs:
       - run: uv run pytest
       - name: Apply Alembic migrations
         run: uv run alembic upgrade head
+      - name: Validate migration downgrade and re-upgrade
+        run: uv run alembic downgrade 0001 && uv run alembic upgrade head
       - name: Integration tests (live PostgreSQL + Redis)
         run: uv run pytest -m integration
 

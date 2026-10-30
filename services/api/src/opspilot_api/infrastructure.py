@@ -1,7 +1,12 @@
 """Factories for the long-lived PostgreSQL and Redis clients owned by the app lifespan."""
 
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from opspilot_api.config import Settings
 
@@ -22,3 +27,7 @@ def create_redis_client(settings: Settings) -> Redis:
         socket_connect_timeout=settings.DEPENDENCY_TIMEOUT_SECONDS,
         socket_timeout=settings.DEPENDENCY_TIMEOUT_SECONDS,
     )
+
+
+def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(engine, expire_on_commit=False)
