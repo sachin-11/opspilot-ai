@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #0f1315;
+  --color-panel: #161c1f;
+  --color-line: #2b353a;
+  --color-ink: #e8eef0;
+  --color-muted: #9aa8ae;
+  --color-accent: #f2b441;
+  --color-ok: #5fd08a;
+  --color-warn: #f2b441;
+  --color-bad: #ff7a6b;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+body {
+  background-color: var(--color-canvas);
+  background-image: linear-gradient(var(--color-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  background-position: -1px -1px;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Fade the grid so it recedes behind content. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(ellipse at top, rgb(15 19 21 / 0.55), var(--color-canvas) 85%);
+}
