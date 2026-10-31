@@ -471,7 +471,7 @@ An owner/admin creates an invitation (`email`, `role`). The token (`secrets.toke
 
 ### WebSocket tickets
 
-`POST /api/v1/auth/ws-ticket {workspace_id, channel}` (user session + membership) returns a random ticket stored in Redis as a **hash** with a short TTL (`AUTH_WS_TICKET_TTL_SECONDS`, default 30), bound to user, workspace, membership, and channel. The socket (`/api/v1/ws/workspaces/{id}/incidents?ticket=`) consumes it atomically (`GETDEL`), so it is single use; reused, expired, wrong-workspace, wrong-channel, and forged tickets close with 4401. The server re-checks membership before subscribing and every few seconds afterwards, closing with 4403 on revocation, forwards only its own workspace's events, and enforces per-user connection and message-rate limits. Every reconnect obtains a new ticket. Tickets are never logged, and bearer tokens and API keys are not accepted on the socket.
+`POST /api/v1/auth/ws-ticket {workspace_id, channel}` (user session + membership) returns a random ticket stored in Redis as a **hash** with a short TTL (`AUTH_WS_TICKET_TTL_SECONDS`, default 30), bound to user, workspace, membership, and channel. The socket (`/api/v1/ws/workspaces/{id}/incidents?ticket=`) consumes it atomically (`GETDEL`), so it is single use; reused, expired, wrong-workspace, wrong-channel, and forged tickets close with 4401. The server re-checks membership before subscribing and every few seconds afterwards, closing with 4403 on revocation (including a disabled user), closes every socket after `AUTH_WS_MAX_LIFETIME_SECONDS` (default 3600) with 4401 so the client must reconnect with a fresh ticket, which requires a still-valid web session, forwards only its own workspace's events, and enforces per-user connection and message-rate limits. Every reconnect obtains a new ticket. Tickets are never logged, and bearer tokens and API keys are not accepted on the socket.
 
 ### Separation of duties
 
@@ -483,6 +483,10 @@ An owner/admin creates an invitation (`email`, `role`). The token (`secrets.toke
 ### Rate limiting
 
 Redis token buckets (atomic Lua), keyed by identity (user, API key, source public ID, or IP hash), with bounded key lifetimes. Rules cover authentication failures, API-key traffic, webhooks, investigation starts and other LLM operations, knowledge and repository search, remediation creation, review/publish attempts, WebSocket tickets and connections, and invitation creation/acceptance. Exceeding a limit returns `429` with `Retry-After`; internal keys are never exposed. If Redis is unreachable, **high-risk mutation rules fail closed** (429) while read-like rules fail open (availability over throttling). Counters `opspilot_rate_limit_allowed_total` / `_denied_total` are exported. `AUTH_RATE_LIMIT_MULTIPLIER` scales limits (the test suite relaxes it).
+
+### Client IP behind a proxy
+
+Rate limits and audit-log IP hashes use the caller's address. `X-Forwarded-For` is attacker-controlled, so it is **ignored by default** and uvicorn's own proxy-header handling is disabled (`--no-proxy-headers`). Set `TRUSTED_PROXY_CIDRS` (comma-separated CIDRs) to the load balancer and the web container's network to believe it: when the direct peer is inside that list, the chain is read right to left and the first address that is not a trusted proxy is the client, so entries a caller prepends cannot win. Malformed chains fall back to the direct peer, networks that match everything (`/0`) are rejected at startup, and the header is length-bounded. Without a load balancer (local development) every user appears to come from the web container, which is the safe fallback.
 
 ### Audit log and integrity verification
 

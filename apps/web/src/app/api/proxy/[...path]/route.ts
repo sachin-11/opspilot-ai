@@ -2,7 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getAuthConfig } from "@/lib/auth/config";
 import { csrfValid, CSRF_HEADER, openSession, SESSION_COOKIE } from "@/lib/auth/security";
 
-const FORWARD_REQUEST = ["content-type", "accept", "idempotency-key", "x-request-id"];
+// x-forwarded-for carries the edge-appended client address so the API can rate limit and audit the
+// real caller. The API only believes it when this server is inside TRUSTED_PROXY_CIDRS.
+const FORWARD_REQUEST = ["content-type", "accept", "idempotency-key", "x-request-id", "x-forwarded-for"];
 const PUBLIC_HEALTH = new Set(["health/live", "health/ready"]);
 const FORWARD_RESPONSE =["content-type", "retry-after", "x-request-id", "www-authenticate"];
 

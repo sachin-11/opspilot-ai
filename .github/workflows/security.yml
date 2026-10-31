@@ -1,0 +1,82 @@
+name: Security
+
+# Dependency and container-image vulnerability gates. They also run weekly because new CVEs are
+# published against code that has not changed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python-dependencies:
+    name: Python dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # Audits the exact locked versions (runtime and dev), not whatever resolves today.
+      - run: uv export --frozen --no-hashes --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+      - run: uvx pip-audit@2.10.1 -r "$RUNNER_TEMP/requirements.txt" --no-deps --disable-pip
+
+  node-dependencies:
+    name: Node dependencies (pnpm audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Anything that ships to users must be clean; build-only tooling fails on high or critical.
+      - run: pnpm audit --prod
+      - run: pnpm audit --audit-level high
+
+  container-images:
+    name: Container image scan (Trivy, ${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            context: services/api
+            dockerfile: infra/docker/api.Dockerfile
+          - image: web
+            context: apps/web
+            dockerfile: infra/docker/web.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image from the current base (--pull)
+        run: >-
+          docker build --pull
+          -f ${{ matrix.dockerfile }}
+          --build-arg NEXT_PUBLIC_API_BASE_URL=http://localhost:8300
+          -t opspilot-${{ matrix.image }}:scan
+          ${{ matrix.context }}
+      # Fixable HIGH and CRITICAL findings fail the job. Unfixed ones are reported by Trivy
+      # but cannot be acted on, so they do not block merges.
+      - name: Scan with Trivy
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          aquasec/trivy:0.76.1 image
+          --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          opspilot-${{ matrix.image }}:scan

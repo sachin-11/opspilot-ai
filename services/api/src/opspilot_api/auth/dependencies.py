@@ -15,6 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import HTTPConnection
 
 from opspilot_api.auth.audit import hash_ip, record_audit
+from opspilot_api.auth.clientip import resolve_client_ip
 from opspilot_api.auth.context import (
     Actor,
     ForbiddenError,
@@ -45,7 +46,11 @@ def request_info(conn: HTTPConnection) -> RequestInfo:
     settings: Settings = conn.app.state.settings
     state = conn.scope.get("state", {})
     request_id = state.get("correlation_id") or "unknown-request"
-    client = conn.client.host if conn.client else None
+    client = resolve_client_ip(
+        conn.client.host if conn.client else None,
+        conn.headers.get("x-forwarded-for"),
+        settings.trusted_proxy_networks,
+    )
     return RequestInfo(
         request_id=request_id,
         correlation_id=state.get("correlation_id"),
