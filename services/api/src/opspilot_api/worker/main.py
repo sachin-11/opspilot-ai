@@ -12,6 +12,7 @@ from rq.job import Job
 from sqlalchemy.exc import SQLAlchemyError
 
 from opspilot_api.config import Settings, get_settings
+from opspilot_api.error_tracking import init_error_tracking
 from opspilot_api.infrastructure import create_db_engine, create_session_factory
 from opspilot_api.investigations.service import recover_stale_investigations
 from opspilot_api.knowledge.service import recover_stale_jobs
@@ -77,6 +78,7 @@ async def recover_stale_work(settings: Settings) -> tuple[int, int, int]:
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.LOG_LEVEL.value)
+    init_error_tracking(settings)
     try:
         recovered_investigations, recovered_ingestions, recovered_repositories = asyncio.run(
             recover_stale_work(settings)

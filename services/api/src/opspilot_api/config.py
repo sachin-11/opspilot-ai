@@ -46,7 +46,10 @@ def _validate_origin(origin: str) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", case_sensitive=True)
+    # Validation errors are logged at startup; never echo the rejected value, which may be a secret.
+    model_config = SettingsConfigDict(
+        extra="ignore", case_sensitive=True, hide_input_in_errors=True
+    )
 
     APP_ENV: Environment = Environment.DEVELOPMENT
     API_HOST: str = "0.0.0.0"  # noqa: S104 - bound inside the container
@@ -66,6 +69,11 @@ class Settings(BaseSettings):
     REDIS_URL: SecretStr
 
     DEPENDENCY_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
+
+    # Optional error tracking. Unset (or empty) disables it; see error_tracking.py for scrubbing.
+    SENTRY_DSN: SecretStr | None = None
+    SENTRY_ENVIRONMENT: str | None = Field(default=None, max_length=64)
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(default=0.0, ge=0, le=1)
 
     # Connection pool of the API process. Each process holds up to POOL_SIZE + MAX_OVERFLOW
     # connections, so size these against PostgreSQL max_connections across every process.
@@ -265,6 +273,19 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @field_validator("SENTRY_DSN")
+    @classmethod
+    def _check_sentry_dsn(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            parsed = urlparse(value.get_secret_value())
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or len(parsed.path) < 2
+            ):
+                raise ValueError("SENTRY_DSN must look like https://<key>@<host>/<project-id>")
+        return value
+
     @field_validator("TRUSTED_PROXY_CIDRS", mode="before")
     @classmethod
     def _split_proxy_cidrs(cls, value: object) -> object:
@@ -291,6 +312,8 @@ class Settings(BaseSettings):
         "GITHUB_APP_PRIVATE_KEY_FILE",
         "GITHUB_WEBHOOK_SECRET",
         "OBS_SECRET_ENCRYPTION_KEY",
+        "SENTRY_DSN",
+        "SENTRY_ENVIRONMENT",
         mode="before",
     )
     @classmethod

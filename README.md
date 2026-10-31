@@ -505,6 +505,10 @@ docker compose exec api python -m opspilot_api.auth.audit_verify [--workspace <u
 - Redis-backed rate limits are approximate under Redis failover; the local IdP is for development only.
 - Invitation email is not delivered by OpsPilot; the token is handed to the inviter once.
 
+## Error tracking (optional, Sentry)
+
+Set `SENTRY_DSN` (and optionally `SENTRY_ENVIRONMENT`, `SENTRY_TRACES_SAMPLE_RATE`, default 0) to report unhandled exceptions from the API and the worker; leave it empty to keep error tracking off. A malformed DSN fails at startup without echoing its value. Reports are scrubbed twice: the SDK is configured not to collect user identity, cookies, request bodies, query strings, stack-frame variables, database query data, queue payloads, or GenAI inputs/outputs, and only an allowlist of request headers (`user-agent`, `content-type`, `content-length`, `x-request-id`, `accept`) is kept; a `before_send` hook then removes the same fields again (including the query string, which carries WebSocket tickets) and strips the user and client address. Tests send a real request error through a capturing transport and assert that a body, cookie, bearer token, ticket and local variable never appear in the event. Delivery to Sentry itself is configured by you and is not exercised by the test suite.
+
 ## HTTP metrics
 
 Every HTTP request is measured by an outermost middleware and exported with the other counters on the authenticated `/api/v1/metrics` endpoint: `opspilot_http_requests_total{method,route,status}`, `opspilot_http_request_duration_seconds{method,route}` (histogram) and `opspilot_http_requests_in_progress`. The `route` label is the matched route template (`/api/v1/workspaces/{workspace_id}/incidents`), never the raw path, and unmatched paths share the single value `unmatched`, so identifiers cannot create unbounded series; nothing from the request body, headers, or identity is recorded. Starting points for dashboards and alerts:

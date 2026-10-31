@@ -13,6 +13,7 @@ from opspilot_api.auth.providers import create_identity_provider
 from opspilot_api.auth.ratelimit import RateLimiter
 from opspilot_api.auth.router import router as auth_router
 from opspilot_api.config import APP_NAME, APP_VERSION, Settings, get_settings
+from opspilot_api.error_tracking import init_error_tracking
 from opspilot_api.errors import register_exception_handlers
 from opspilot_api.health.router import router as health_router
 from opspilot_api.http_metrics import HttpMetricsMiddleware
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.LOG_LEVEL.value)
+    init_error_tracking(settings)
 
     # Fails startup on misconfiguration (e.g. local auth in production).
     identity_provider = create_identity_provider(settings)

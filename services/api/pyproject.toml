@@ -23,6 +23,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "redis>=8.1.0",
     "rq>=3.0.0",
+    "sentry-sdk>=2.73.0",
     "sqlalchemy[asyncio]>=2.1.6",
     "uvicorn>=0.54.0",
 ]
