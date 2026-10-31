@@ -1,6 +1,6 @@
 # LinkedIn post (copy and paste)
 
-Attach images in this order: 0 (architecture), 8 (human review gate), 2 (overview), 7 (report), 11 (pipeline), 14 (dead letters). Put the full walkthrough in the comments or as an article (`docs/project-article.md`).
+Attach images in this order: 0 (architecture), 8 (human review gate), 2 (overview), 7 (report), 20 (evaluation gate catching a regression), 14 (dead letters). Put the full walkthrough in the comments or as an article (`docs/project-article.md`).
 
 ---
 
@@ -16,7 +16,7 @@ What it does:
 
 Choices I care about:
 • Multi-tenant from day one: OIDC sign-in, server-side roles on every route, scoped API keys, an integrity-checked audit log
-• LLM controls: versioned prompts, evaluation gates in CI, budgets, circuit breakers
+• LLM controls: versioned prompts, a 104-case evaluation gate (a deliberately broken variant dropped to 39% and tripped the hard safety gates), budgets, circuit breakers
 • Fail loudly: a database outage returns a retryable 503, never a fake success
 
 Stack: FastAPI, Next.js, PostgreSQL + pgvector, Redis, Kafka, LangGraph, Keycloak, Docker.

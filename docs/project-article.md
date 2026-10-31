@@ -96,6 +96,22 @@ OpsPilot is my attempt at the middle path. The AI does the reading and proposes 
 
 *Image 17. The services a workspace monitors. Everything in the application is scoped to a workspace, and a request for another tenant's resource is indistinguishable from a request for something that does not exist.*
 
+## 8. Evaluation gates for the LLM
+
+![LLMOps overview](images/18-llmops-overview.png)
+
+*Image 18. Every change to a prompt or model is evaluated against a 104-case golden dataset before it can be published. The trend shows two baseline runs near 99% and a deliberately broken variant dropping to 39%.*
+
+![Evaluation runs](images/19-llmops-evaluations.png)
+
+*Image 19. Runs are started from the console and executed by the worker. Each run records the dataset version, variant, purpose and pass counts. Token and latency figures are labelled "synthetic (not measured)" because this run uses the deterministic provider.*
+
+![A regression the gate catches](images/20-llmops-regression-blocked.png)
+
+*Image 20. The regressing variant passes 41 of 104 cases, and the hard safety gates fail: zero tenant leaks (5 violations) and zero secret leaks (4 violations). Hard gates can never be overridden, so this prompt could not be published.*
+
+These runs use the deterministic provider, so they test the harness, the graders and the gates, not the quality of a real model. A separate, capped, opt-in command evaluates a real model.
+
 ## How it is built
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy and Alembic, LangGraph, RQ. Strict typing with mypy, ruff for style.
@@ -140,5 +156,8 @@ It runs locally with Docker Compose and in GitHub Actions. It has **not** been d
 | 15 | `images/15-audit-log.png` | Audit log |
 | 16 | `images/16-members-and-roles.png` | Members and roles |
 | 17 | `images/17-services.png` | Services |
+| 18 | `images/18-llmops-overview.png` | LLM quality trend |
+| 19 | `images/19-llmops-evaluations.png` | Evaluation runs |
+| 20 | `images/20-llmops-regression-blocked.png` | Regression caught by hard gates |
 
 Regenerate the screenshots with `node apps/web/scripts/capture-screenshots.mjs` against a stack that has the demo data.

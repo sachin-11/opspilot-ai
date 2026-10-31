@@ -119,4 +119,17 @@ for (const [name, path] of [
   await shot(name);
 }
 
+// LLMOps: needs evaluation runs (see docs/project-article.md for how they were produced).
+await page.goto(`${BASE}/llmops`);
+await shot("18-llmops-overview");
+await page.goto(`${BASE}/llmops/evaluations`);
+await shot("19-llmops-evaluations");
+// The newest run is the deliberately regressing candidate; its detail page shows the gate verdict.
+const newest = page.locator("a[href^='/llmops/evaluations/']").first();
+if (await newest.count()) {
+  await newest.click();
+  await page.waitForLoadState("networkidle").catch(() => undefined);
+  await shot("20-llmops-regression-blocked");
+}
+
 await browser.close();
