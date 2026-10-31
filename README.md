@@ -1,6 +1,6 @@
 # OpsPilot AI
 
-OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 5: the observability event pipeline (signed webhooks, Kafka-compatible streaming, CloudWatch read tools)**, built on the Module 0–4 foundation, including the read-only GitHub integration.
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 6: evidence-backed remediation proposals, constrained patch generation, deterministic policy validation, isolated sandbox verification, explicit human approval, and GitHub fix pull requests**, built on the Module 0–5 foundation (incidents, investigations, runbook RAG, read-only GitHub integration, observability pipeline).
 
 ## Module 3, 4, and 5 capabilities
 
@@ -12,7 +12,7 @@ Included: the incident and human-reviewed investigation flows plus private text/
 
 ### Intentionally deferred to later modules
 
-Fix generation and pull-request creation, OCR, DOCX, web scraping, Slack, production authentication/authorization, billing, Kafka, Kubernetes, and automated remediation. **All remediation remains advisory; OpsPilot never executes production changes.**
+OCR, DOCX, web scraping, Slack, production authentication/authorization (Module 7), billing, Kubernetes, and any automated production remediation. **OpsPilot never merges, deploys, or changes production.** The only write it performs is creating a fix branch, one commit, and a pull request after explicit human approval (Module 6).
 
 ## Architecture
 
@@ -300,7 +300,85 @@ What this shows, and what it does not: the requested 200 events/s was **not** re
 ### Module 5 limitations
 Workspace IDs are still not authentication; the metrics endpoint and webhook public IDs are unauthenticated by design (HMAC protects ingestion); webhook secrets are encrypted with a single environment key; the broker is single-node with replication factor 1 and no TLS/SASL (local development only); rate-limit and lag checks are best-effort and approximate; ordering is per workspace+service only; CloudWatch is verified with stubs, not real AWS; the local benchmark measures one laptop-class machine, not production capacity. Automated remediation, Slack, and production AWS deployment remain deferred.
 
+## Remediation (Module 6)
+
+Module 6 turns an approved investigation into a reviewable GitHub pull request, with deterministic controls between every model suggestion and every side effect. **OpsPilot does not auto-merge, auto-approve, deploy, push to a default branch, or mutate infrastructure.**
+
+### Lifecycle
+
+`drafting` → `policy_check` → `sandbox_queued` → `sandbox_running` → `awaiting_approval` → `approved` → `publishing` → `pull_request_created`, with the terminal/side states `policy_blocked`, `verification_failed`, `rejected`, `stale`, `failed`, and `cancelled`. Legal transitions are an explicit table (`remediation/state.py`); any other transition returns `409 Conflict`. A `revision_requested` review returns to `drafting`; an invalidated approval returns to `policy_check` for re-verification.
+
+A remediation may start only from a **completed, human-approved investigation** with a root cause and supporting evidence, whose service maps to an **active, non-archived** repository that has a ready snapshot (the concrete base commit) that is still the default branch head. One active remediation per investigation; failed/stale/blocked ones are regenerated with `POST .../retry`. The model may **abstain** (`no_safe_patch`, `more_evidence_required`, `outside_allowed_scope`, `human_work_required`); abstention is a normal outcome (`failed` with an `abstained_*` code), preferred over an unsafe patch.
+
+API (all under `/api/v1/workspaces/{workspace_id}`): `POST /investigations/{id}/remediations`, `GET /remediations`, `GET /remediations/{id}`, `POST /remediations/{id}/cancel|retry|review|publish`, `GET /remediations/{id}/sandbox-runs|verification|pull-request`. Generation and publication run asynchronously on RQ.
+
+### Structured output and validation
+
+The generator returns a typed object (problem statement, evidence IDs, repository, base commit, per-file explanations, unified diff, risk assessment, **registered command IDs**, rollback guidance, limitations). Output is rejected when it cites nonexistent evidence, targets another repository or base commit, has a malformed/binary diff, lists files that differ from the diff, or requests anything other than a registered command ID. At most **two** bounded repair attempts follow.
+
+### Policy rules (deterministic, versioned `2026-10.1`)
+
+No model decides policy; `evaluate_patch` is a pure function recorded in `remediation_policy_evaluations`.
+
+- **Blocked paths:** `.github/workflows/` and other CI config, `.env*`, keys/certificates, Terraform/Kubernetes/Helm/infra and deployment paths, Dockerfiles/compose, database migrations and `.sql`, dependency lockfiles, generated/vendored directories, auth and billing code (unless explicitly enabled), `.git`, anything outside the mapped monorepo prefix, and unlisted file types.
+- **Blocked content:** symlink creation, path traversal, submodule changes, binary patches, executable-bit/mode changes, obfuscated/dynamic code, credential material, network exfiltration and raw sockets, reverse shells, persistence mechanisms, CI bypasses, test deletion or weakening, broad exception swallowing, disabled security checks, non-fix target branches.
+- **Limits:** files, added lines, deleted lines, patch bytes (configurable `REMEDIATION_MAX_*`), sandbox attempts, revisions.
+- **Warnings** (allowed, risk raised): public API changes, configuration or dependency changes, large surface, missing targeted test, reduced coverage, instruction-like text in the patch.
+
+### Sandbox security
+
+Repository code (including tests) runs **only** in an ephemeral Docker container created by `build_docker_args` from a registered command, never from model text: non-root uid 10001, read-only root filesystem with a size-limited tmpfs, one dedicated writable workspace mount, `--network none`, `--cap-drop ALL`, `no-new-privileges`, CPU/memory (no swap)/PID limits, hard timeout, bounded captured output (marked truncated), post-run disk-limit check, no Docker socket, no host-home or workspace-root mount, no `--privileged`, and a fixed sanitized environment (`PATH`, `HOME`, `LANG`, `CI`, ... only; no application, AWS, GitHub, database, Redis, Kafka, or LLM secrets). The workspace and container are removed after success, failure, timeout, or cancellation (leftover workspaces are purged by retention). Build the image with `scripts/build-sandbox.ps1`.
+
+The Compose `worker` has **no Docker access and does not serve the `remediation` queue**. Remediation jobs run on a separate, sandbox-capable worker: `scripts/remediation-worker.ps1` (host process, `WORKER_QUEUES=remediation`). If Docker or the image is unavailable, the run fails closed with `sandbox_unavailable`.
+
+### Repository checkout
+
+The checkout reads the exact approved commit through the Module 4 read-only provider (tree + blobs). It never runs `git clone`, so no credential is placed in a Git remote and no hook, filter, or submodule can execute. Symlinks and submodules are never materialized, unsafe paths and oversized trees are refused, and a tree hash is recorded and re-verified.
+
+### Verification command registry
+
+Registered IDs: `python.pytest`, `python.pytest_targeted`, `python.ruff_check`, `python.ruff_format`, `python.ruff_security`, `python.mypy`, `node.test`, `node.lint`, `node.typecheck`, `node.build`. Each is an argv vector (no shell) with required project markers, timeout, fixed environment, and maximum output; `node.lint`/targeted pytest accept only validated, bounded path arguments. The model selects IDs; free-form commands never resolve.
+
+### Baseline comparison
+
+Checks run first on the unpatched base commit, then the patch is applied and the **same checks** rerun. Pre-existing failures are never attributed to the patch; new failures block approval; a patch must not be reported verified when no test check ran (`not_run`); skipped checks or remaining pre-existing failures make the result `partial` (shown as such); `passed` means every selected check executed and passed. Deleting or weakening tests is blocked by policy.
+
+### Approval binding
+
+Approval binds to the workspace, repository, base commit, revision ID, patch hash, policy version, verification-result hash (recomputed from persisted check rows), and an expiry time, stored with a context hash. At publication every value is re-derived; any change (a new revision, edited rows, policy-version bump, expiry, advanced base) invalidates the approval, records an audit event, returns the remediation to `policy_check` (or `stale`), and publishes nothing. Approvals are append-only, idempotent on replay, single use (one publication row per approval), and fail closed on timeout or provider outage. Revisions, policy evaluations, approvals, and audit events are protected by database triggers that reject `UPDATE`/`DELETE`.
+
+### GitHub write permissions
+
+The write provider is a separate, minimal interface: verify permissions, create a branch, create **one commit**, open a PR, read PR status. There is no merge, force push, default-branch push, review approval, branch-protection, workflow dispatch, release, deployment, or settings capability, and branch names must start with `opspilot/fix-`. It is **disabled by default**; enable it by setting `REMEDIATION_GITHUB_WRITE_ENABLED=true` **and** listing `"<workspace_uuid>:<owner>/<repo>"` in `REMEDIATION_WRITE_ENABLED_REPOSITORIES`. The GitHub App needs `contents: write` and `pull_requests: write` (the token requests only those plus `metadata: read`). The base commit and default-branch head are rechecked before the branch is created; retries reuse the same branch, commit, and PR. If the target branch advanced, the remediation becomes `stale`; OpsPilot never rebases automatically.
+
+### Local fixture mode
+
+With `GITHUB_PROVIDER=fixture` and `REMEDIATION_WRITE_PROVIDER=fixture` (defaults), `AI_PRIMARY_PROVIDER=fake`, no network or paid API is used: a deterministic fake generator proposes a fix for the planted connection-pool regression (or abstains), and an in-memory writer records the branch/commit/PR. CI uses only these providers and synthetic repositories.
+
+```powershell
+scripts/build-sandbox.ps1                      # once: build the sandbox image
+scripts/remediation-worker.ps1                 # sandbox-capable worker (separate terminal)
+```
+
+Evaluation (deterministic, fails on any unsafe publication, approval bypass, invalid citation, duplicate PR, or missing required block):
+
+```powershell
+cd services/api
+uv run python -m opspilot_api.remediation.evaluation --dataset tests/fixtures/remediation_evaluation.json --sandbox docker
+```
+
+### Known security limitations (Module 6)
+
+- Actors are `null` until Module 7 authentication; anyone who can reach the API can review. Approval is explicit but not yet identity-backed.
+- Docker isolation is container-level, not a VM; a kernel or runtime escape is out of scope. The disk limit is enforced after each command (bind-mounted workspaces cannot be hard-capped by Docker) and the sandbox host should be dedicated.
+- The sandbox worker needs Docker Engine access; do not give that access to the general worker or mount the Docker socket into containers.
+- Content rules are pattern-based and conservative; they cannot prove arbitrary code is safe. They are a gate in front of sandbox execution and human review, not a replacement for either.
+- Patches are applied by a strict built-in unified-diff applier (no fuzz); only text files are supported. A commit's membership in the repository is checked through the provider, which for GitHub also resolves fork-network commits.
+- Only the fake generator ships; a real model adapter must keep the same structured-output contract and cannot weaken policy (the module treats all model output as untrusted).
+
 ## Current security boundary
+
+Module 6 adds a controlled, approval-gated GitHub write path (branch, commit, pull request only); everything else below still holds.
 
 Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated. Do not expose this build as a production-secure multi-tenant service. Evidence and knowledge chunks are bounded and common secret forms are redacted, but this is defense in depth rather than complete DLP. Uploaded originals remain unredacted in private storage and local storage is not encrypted by the application. Incident/log/document content remains untrusted. Hidden chain-of-thought and full prompts are neither stored nor returned; only structured outputs, evidence references, concise summaries, and safe errors are persisted.
 
@@ -325,7 +403,7 @@ export NEXT_PUBLIC_API_BASE_URL=http://localhost:8300
 corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test && corepack pnpm build
 ```
 
-Unit tests use test-only settings and need no running services or real credentials.
+Unit tests use test-only settings and need no running services or real credentials. Integration tests additionally need the sandbox image (`scripts/build-sandbox.ps1`) and Docker, because Module 6 verifies patches in real hardened containers; they fail loudly instead of skipping when the image is missing.
 
 ## Troubleshooting
 

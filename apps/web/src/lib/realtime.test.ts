@@ -93,4 +93,29 @@ describe("realtime query routing", () => {
     expect(invalidate).not.toHaveBeenCalled();
     expect(client.getQueryData(observabilityLiveKey(workspaceId))).toBeUndefined();
   });
+
+  it("invalidates remediation list, detail and verification on remediation events", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const remediationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await invalidateRealtimeEvent(client, workspaceId, {
+      ...event,
+      type: "remediation.verification_completed",
+      data: {remediation_id: remediationId, status: "awaiting_approval"},
+    });
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["remediations", workspaceId]});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["remediation", workspaceId, remediationId]});
+    expect(invalidate).toHaveBeenCalledWith({queryKey: ["remediation-verification", workspaceId, remediationId]});
+  });
+
+  it("ignores remediation events from another workspace", async () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await invalidateRealtimeEvent(client, "44444444-4444-4444-8444-444444444444", {
+      ...event,
+      type: "remediation.stale",
+      data: {remediation_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+  });
 });

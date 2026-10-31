@@ -85,6 +85,9 @@ jobs:
       EMBEDDING_DIMENSIONS: "64"
       RERANK_PROVIDER: fake
       GITHUB_PROVIDER: fixture
+      # Module 6: fake model, fixture GitHub provider/writer, no real GitHub writes or paid APIs.
+      REMEDIATION_WRITE_PROVIDER: fixture
+      REMEDIATION_GITHUB_WRITE_ENABLED: "false"
       EVENT_BUS_BACKEND: kafka
       KAFKA_BOOTSTRAP_SERVERS: "127.0.0.1:19092"
       REQUIRE_KAFKA: "1"
@@ -122,8 +125,15 @@ jobs:
         run: uv run python -m opspilot_api.investigations.checkpoint_setup
       - name: Validate migration downgrade and re-upgrade
         run: uv run alembic downgrade 0001 && uv run alembic upgrade head
-      - name: Integration tests (live PostgreSQL, Redis, and the Kafka-compatible broker)
+      - name: Build the verification sandbox image (Module 6)
+        run: docker build -f ../../infra/docker/sandbox.Dockerfile -t opspilot-sandbox:latest ../../infra/docker
+      - name: Integration tests (live PostgreSQL, Redis, Kafka-compatible broker, Docker sandbox)
         run: uv run pytest -m integration
+      - name: Deterministic remediation fixture evaluation (fake model, local providers, Docker sandbox)
+        run: >-
+          uv run python -m opspilot_api.remediation.evaluation
+          --dataset tests/fixtures/remediation_evaluation.json
+          --sandbox docker --output remediation-evaluation.json
       - name: Deterministic retrieval evaluation
         run: >-
           uv run python -m opspilot_api.knowledge.evaluation

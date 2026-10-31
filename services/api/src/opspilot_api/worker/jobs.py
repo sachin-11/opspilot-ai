@@ -11,6 +11,11 @@ from opspilot_api.config import get_settings
 from opspilot_api.investigations.models import Investigation, InvestigationReview
 from opspilot_api.investigations.workflow import run_workflow
 from opspilot_api.knowledge.ingestion import run_ingestion
+from opspilot_api.remediation.jobs import (
+    resume_remediation_job,
+    run_publish_job,
+    run_remediation_job,
+)
 from opspilot_api.repositories.jobs import (
     run_installation_sync_job,
     run_repository_sync_job,
@@ -110,3 +115,30 @@ def run_webhook_delivery(delivery_id: str, attempt: int = 1) -> None:
     from uuid import UUID
 
     run_webhook_delivery_job(get_settings(), UUID(delivery_id), attempt)
+
+
+def run_remediation(
+    workspace_id: str, remediation_id: str, thread_id: str, entry: str = "start"
+) -> None:
+    """Run the remediation graph (or its re-verification entry) on the sandbox-capable worker."""
+    from uuid import UUID
+
+    run_remediation_job(get_settings(), UUID(workspace_id), UUID(remediation_id), thread_id, entry)
+
+
+def resume_remediation(
+    workspace_id: str, remediation_id: str, thread_id: str, approval_id: str
+) -> None:
+    """Resume the human-approval interrupt from an append-only approval row."""
+    from uuid import UUID
+
+    resume_remediation_job(
+        get_settings(), UUID(workspace_id), UUID(remediation_id), thread_id, UUID(approval_id)
+    )
+
+
+def run_remediation_publish(workspace_id: str, remediation_id: str) -> dict[str, object]:
+    """Create the fix branch, commit, and pull request for an approved remediation."""
+    from uuid import UUID
+
+    return run_publish_job(get_settings(), UUID(workspace_id), UUID(remediation_id))

@@ -10,6 +10,7 @@ from opspilot_api.incidents.models import Base
 from opspilot_api.investigations import models as investigation_models  # noqa: F401
 from opspilot_api.knowledge import models as knowledge_models  # noqa: F401
 from opspilot_api.observability import models as observability_models  # noqa: F401
+from opspilot_api.remediation import models as remediation_models  # noqa: F401
 from opspilot_api.repositories import models as repository_models  # noqa: F401
 
 config = context.config

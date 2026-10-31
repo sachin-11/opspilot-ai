@@ -42,3 +42,20 @@ def test_secrets_not_exposed_in_repr() -> None:
     assert TEST_PASSWORD not in repr(settings)
     assert "redis-test-secret" not in repr(settings)
     assert TEST_PASSWORD not in settings.database_url.render_as_string(hide_password=True)
+
+
+def test_fake_remediation_sandbox_is_refused_in_production() -> None:
+    with pytest.raises(ValueError, match="fake remediation sandbox"):
+        make_settings(
+            APP_ENV=Environment.PRODUCTION,
+            REMEDIATION_SANDBOX_PROVIDER="fake",
+            CORS_ORIGINS="https://app.example.com",
+        )
+
+
+def test_remediation_write_defaults_are_disabled() -> None:
+    settings = make_settings()
+    assert settings.REMEDIATION_GITHUB_WRITE_ENABLED is False
+    assert settings.REMEDIATION_WRITE_ENABLED_REPOSITORIES == []
+    with pytest.raises(ValueError, match="less than or equal to 2"):
+        make_settings(REMEDIATION_MAX_REPAIR_ATTEMPTS=3)

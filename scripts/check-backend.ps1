@@ -2,6 +2,7 @@
 # (start the stack and apply migrations first; settings come from .env).
 param([switch]$Integration)
 . "$PSScriptRoot\_common.ps1"
+# Integration also needs the sandbox image: scripts/build-sandbox.ps1
 
 Push-Location (Join-Path $Root 'services/api')
 try {
@@ -14,6 +15,8 @@ try {
         Invoke-Step 'pytest (integration)' { uv run pytest -m integration }
         Invoke-Step 'knowledge evaluation' { uv run python -m opspilot_api.knowledge.evaluation --dataset tests/fixtures/retrieval_evaluation.json }
         Invoke-Step 'repository evaluation' { uv run python -m opspilot_api.repositories.evaluation --dataset tests/fixtures/repository_evaluation.json }
+        Invoke-Step 'remediation evaluation (fake sandbox)' { uv run python -m opspilot_api.remediation.evaluation --dataset tests/fixtures/remediation_evaluation.json --sandbox fake }
+        Invoke-Step 'remediation evaluation (docker sandbox)' { uv run python -m opspilot_api.remediation.evaluation --dataset tests/fixtures/remediation_evaluation.json --sandbox docker }
         Invoke-Step 'pipeline smoke test' { uv run python -m opspilot_api.observability.smoke }
     }
 } finally { Pop-Location }

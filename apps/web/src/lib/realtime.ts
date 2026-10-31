@@ -36,6 +36,17 @@ export async function invalidateRealtimeEvent(
       await queryClient.invalidateQueries({queryKey: ["investigation", activeWorkspaceId, investigationId]});
     }
   }
+  if (event.type.startsWith("remediation.")) {
+    const keys: QueryKey[] = [["remediations", activeWorkspaceId]];
+    const remediationId = event.data.remediation_id;
+    if (typeof remediationId === "string") {
+      keys.push(
+        ["remediation", activeWorkspaceId, remediationId],
+        ["remediation-verification", activeWorkspaceId, remediationId],
+      );
+    }
+    await Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({queryKey})));
+  }
   if (event.type.startsWith("repository.")) {
     const progress = repositoryProgressSchema.safeParse(event.data);
     const repositoryId = progress.success ? progress.data.repository_id : undefined;

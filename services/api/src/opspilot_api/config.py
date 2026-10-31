@@ -168,6 +168,45 @@ class Settings(BaseSettings):
     OBS_CLOUDWATCH_MAX_RESULTS: int = Field(default=100, ge=1, le=1000)
     OBS_CLOUDWATCH_TIMEOUT_SECONDS: float = Field(default=10, gt=0, le=60)
 
+    # --- Module 6 remediation ---
+    REMEDIATION_SANDBOX_PROVIDER: str = Field(default="docker", pattern="^(docker|fake)$")
+    REMEDIATION_SANDBOX_IMAGE: str = Field(default="opspilot-sandbox:latest", min_length=1)
+    REMEDIATION_SANDBOX_CPU: float = Field(default=1.0, gt=0, le=8)
+    REMEDIATION_SANDBOX_MEMORY_MB: int = Field(default=512, ge=64, le=8192)
+    REMEDIATION_SANDBOX_DISK_MB: int = Field(default=256, ge=16, le=4096)
+    REMEDIATION_SANDBOX_PIDS: int = Field(default=128, ge=16, le=2048)
+    REMEDIATION_SANDBOX_TIMEOUT_SECONDS: int = Field(default=120, ge=5, le=1800)
+    REMEDIATION_SANDBOX_MAX_ATTEMPTS: int = Field(default=3, ge=1, le=10)
+    REMEDIATION_ARTIFACT_RETENTION_SECONDS: int = Field(default=3600, ge=0, le=604_800)
+    REMEDIATION_MAX_FILES: int = Field(default=5, ge=1, le=50)
+    REMEDIATION_MAX_ADDED_LINES: int = Field(default=120, ge=1, le=5000)
+    REMEDIATION_MAX_DELETED_LINES: int = Field(default=80, ge=0, le=5000)
+    REMEDIATION_MAX_PATCH_BYTES: int = Field(default=32_768, ge=256, le=1_048_576)
+    REMEDIATION_MAX_REVISIONS: int = Field(default=3, ge=1, le=10)
+    REMEDIATION_MAX_REPAIR_ATTEMPTS: int = Field(default=2, ge=0, le=2)
+    REMEDIATION_APPROVAL_TTL_SECONDS: int = Field(default=3600, ge=60, le=604_800)
+    REMEDIATION_MAX_CONTEXT_FILES: int = Field(default=6, ge=1, le=20)
+    REMEDIATION_MAX_CONTEXT_BYTES: int = Field(default=24_000, ge=1024, le=262_144)
+    REMEDIATION_ALLOW_AUTH_PATHS: bool = False
+    REMEDIATION_ALLOW_BILLING_PATHS: bool = False
+    REMEDIATION_WRITE_PROVIDER: str = Field(default="fixture", pattern="^(fixture|github)$")
+    # Disabled by default; each entry is "<workspace_uuid>:<owner>/<repo>" and must be listed.
+    REMEDIATION_GITHUB_WRITE_ENABLED: bool = False
+    REMEDIATION_WRITE_ENABLED_REPOSITORIES: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
+    REMEDIATION_BRANCH_PREFIX: str = Field(
+        default="opspilot/fix-", pattern=r"^[a-z0-9][a-z0-9/_-]*-$"
+    )
+    REMEDIATION_WORKSPACE_ROOT: str | None = None
+
+    @field_validator("REMEDIATION_WRITE_ENABLED_REPOSITORIES", mode="before")
+    @classmethod
+    def _split_write_repositories(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -270,6 +309,16 @@ class Settings(BaseSettings):
                 raise ValueError("GITHUB_APP_ID and a private key are required for GitHub")
             if self.GITHUB_WEBHOOK_SECRET is None:
                 raise ValueError("GITHUB_WEBHOOK_SECRET is required for GitHub")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_remediation_configuration(self) -> Self:
+        if self.REMEDIATION_SANDBOX_PROVIDER == "fake" and self.APP_ENV is Environment.PRODUCTION:
+            raise ValueError(
+                "the fake remediation sandbox verifies nothing; not allowed in production"
+            )
+        if self.REMEDIATION_WRITE_PROVIDER == "github" and self.GITHUB_PROVIDER != "github":
+            raise ValueError("REMEDIATION_WRITE_PROVIDER=github requires GITHUB_PROVIDER=github")
         return self
 
     @property

@@ -8,6 +8,7 @@ import { useOps } from "./providers";
 import { CodeEvidencePanel } from "./code-evidence-panel";
 import { IncidentObservabilityPanel } from "./incident-observability-panel";
 import { InvestigationPanel } from "./investigation-panel";
+import { RemediationLauncher } from "./remediation-launcher";
 
 const transitions: Record<IncidentStatus, IncidentStatus[]> = {open: ["investigating","mitigated","resolved"], investigating: ["mitigated","resolved"], mitigated: ["investigating","resolved"], resolved: ["investigating"]};
 
@@ -33,6 +34,6 @@ export function IncidentDetail({incidentId}: {incidentId: string}) {
       <label>Severity<select value={item.severity} disabled={severityMutation.isPending} onChange={(e) => severityMutation.mutate(e.target.value as Severity)}>{["sev1","sev2","sev3","sev4"].map((x) => <option key={x}>{x}</option>)}</select></label>
     </article><article className="panel"><h3>Timeline</h3>{timeline.isLoading ? <p>Loading timeline…</p> : timeline.isError ? <p className="error">Timeline unavailable.</p> : <ol className="timeline">{timeline.data?.map((event) => <li key={event.id}><span className="timeline-mark"/><div><strong>{event.summary}</strong><p>{event.event_type.replaceAll("_", " ")} · {event.actor_type}</p><time>{formatDate(event.occurred_at)}</time></div></li>)}</ol>}
       <form className="note-form" onSubmit={addNote}><label>Add operational note<textarea name="summary" required maxLength={500} rows={3}/></label><button className="button primary" disabled={noteMutation.isPending}>{noteMutation.isPending ? "Adding…" : "Add note"}</button></form>
-    </article></section><CodeEvidencePanel incidentId={incidentId} /><IncidentObservabilityPanel incidentId={incidentId} /><InvestigationPanel incidentId={incidentId} />
+    </article></section><CodeEvidencePanel incidentId={incidentId} /><IncidentObservabilityPanel incidentId={incidentId} /><InvestigationPanel incidentId={incidentId} /><RemediationLauncher incidentId={incidentId} />
   </div>;
 }
