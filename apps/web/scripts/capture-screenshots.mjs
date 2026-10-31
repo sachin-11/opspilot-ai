@@ -53,7 +53,6 @@ async function openIncident(titleStart) {
 
 // 01: the sign-in page, before anyone is signed in.
 await page.goto(`${BASE}/login`);
-await shot("01-sign-in");
 
 await page.getByRole("link", { name: "Sign in with SSO" }).click();
 await page.locator("#username").fill(EMAIL);
@@ -63,16 +62,9 @@ await page.getByRole("heading", { name: "Incident overview" }).waitFor();
 
 await shot("02-overview");
 
-await page.goto(`${BASE}/incidents`);
-await shot("03-incidents");
-
 await openIncident("Checkout API 5xx");
 await page.evaluate(() => window.scrollTo(0, 0));
 await shot("04-incident-detail");
-
-// The timeline continues below the fold: show its later events (status changes, notes, mitigation).
-await page.evaluate(() => window.scrollTo(0, 560));
-await shot("05-incident-timeline");
 
 // Investigation reports are long, so capture each part in a tall window.
 async function tall(height, fn) {
@@ -108,12 +100,10 @@ await tall(1000, async () => {
 
 for (const [name, path] of [
   ["11-pipeline-overview", "/observability"],
-  ["12-pipeline-sources", "/observability/sources"],
   ["13-pipeline-signals", "/observability/signals"],
   ["14-pipeline-dead-letters", "/observability/dead-letters"],
   ["15-audit-log", "/settings/audit"],
   ["16-members-and-roles", "/settings/members"],
-  ["17-services", "/settings/services"],
 ]) {
   await page.goto(`${BASE}${path}`);
   await shot(name);

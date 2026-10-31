@@ -14,101 +14,77 @@ OpsPilot is my attempt at the middle path. The AI does the reading and proposes 
 
 *Image 0. A modular monolith: a FastAPI API and an RQ worker from one codebase, a Next.js console that talks to the API only over HTTP, PostgreSQL with pgvector, Redis, Kafka for the signal pipeline, and Keycloak (or any OIDC provider) for sign-in.*
 
-## 1. Sign in with your identity provider
-
-![Sign in](images/01-sign-in.png)
-
-*Image 1. The console never sees a password. It runs the OIDC authorization-code flow with PKCE and keeps the session in a sealed, HttpOnly cookie. Signing out also ends the identity provider's session, so the next sign-in asks for credentials again.*
-
-## 2. The overview
+## 1. The overview
 
 ![Overview](images/02-overview.png)
 
-*Image 2. Active incidents by severity, the most recently updated incidents, and live system status. The page updates in real time over a WebSocket that authenticates with a single-use ticket and re-checks membership every few seconds.*
+*Image 1. Active incidents by severity, the most recently updated incidents, and live system status. The page updates in real time over a WebSocket that authenticates with a single-use ticket and re-checks membership every few seconds.*
 
-## 3. Incidents
-
-![Incidents](images/03-incidents.png)
-
-*Image 3. Incidents come from two places: people declaring them, and the signal pipeline turning alerts into incidents. Filters cover status, severity, service and environment, with cursor pagination.*
-
-## 4. One incident, end to end
+## 2. One incident, end to end
 
 ![Incident detail](images/04-incident-detail.png)
 
-*Image 4. Severity, status, the service, and when the incident was opened, acknowledged, mitigated and resolved. Status changes use optimistic locking, so two responders cannot silently overwrite each other.*
+*Image 2. Severity, status, the service, and when the incident was opened, acknowledged, mitigated and resolved. Status changes use optimistic locking, so two responders cannot silently overwrite each other.*
 
-![Timeline](images/05-incident-timeline.png)
-
-*Image 5. The timeline is the incident's memory: alerts as they arrive, status changes, notes, and later the outcome of the investigation. Repeated alerts with the same fingerprint are correlated into one incident instead of opening a new one each time.*
-
-## 5. AI investigations with a human in the loop
+## 3. AI investigations with a human in the loop
 
 ![Investigation steps](images/06-investigation-steps.png)
 
-*Image 6. An investigation is a durable LangGraph workflow: load context, triage, plan, gather evidence, generate hypotheses, critique them, then write a report. Each step is recorded with its status and duration, and the run has hard limits on steps, tokens and cost.*
+*Image 3. An investigation is a durable LangGraph workflow: load context, triage, plan, gather evidence, generate hypotheses, critique them, then write a report. Each step is recorded with its status and duration, and the run has hard limits on steps, tokens and cost.*
 
 ![Investigation report](images/07-investigation-report.png)
 
-*Image 7. The report states a most likely root cause with a confidence, the impact, alternative hypotheses, containment, remediation and verification plans, and what is unknown. Claims cite the evidence they rest on.*
+*Image 4. The report states a most likely root cause with a confidence, the impact, alternative hypotheses, containment, remediation and verification plans, and what is unknown. Claims cite the evidence they rest on.*
 
 ![Human review gate](images/08-human-review-gate.png)
 
-*Image 8. The gate. The report says plainly that it is advisory and that OpsPilot does not execute remediation. A person can approve, request a revision with feedback, or reject.*
+*Image 5. The gate. The report says plainly that it is advisory and that OpsPilot does not execute remediation. A person can approve, request a revision with feedback, or reject.*
 
 ![A rejected investigation](images/09-investigation-rejected.png)
 
-*Image 9. Rejection is a first-class outcome. Here a notification-queue incident arrived as a 12-alert storm, and the reviewer rejected the AI's hypothesis because the cited cause did not match what the team had found. The decision lands on the timeline.*
+*Image 6. Rejection is a first-class outcome. Here a notification-queue incident arrived as a 12-alert storm, and the reviewer rejected the AI's hypothesis because the cited cause did not match what the team had found. The decision lands on the timeline.*
 
 ![A resolved incident](images/10-incident-resolved-lifecycle.png)
 
-*Image 10. The full lifecycle of another incident: investigating, notes from the responders, mitigated, resolved, and an approved investigation recorded at the end.*
+*Image 7. The full lifecycle of another incident: investigating, notes from the responders, mitigated, resolved, and an approved investigation recorded at the end.*
 
-## 6. The signal pipeline
+## 4. The signal pipeline
 
 ![Pipeline overview](images/11-pipeline-overview.png)
 
-*Image 11. Monitoring tools send HMAC-signed webhooks. They are validated, published to Kafka, normalized, de-duplicated and correlated to incidents. The page shows throughput, latency percentiles, consumer lag, duplicates, failures and broker health.*
-
-![Sources](images/12-pipeline-sources.png)
-
-*Image 12. Sources are the webhook endpoints and read-only cloud integrations that feed the pipeline. Webhook secrets are encrypted at rest and shown only once.*
+*Image 8. Monitoring tools send HMAC-signed webhooks. They are validated, published to Kafka, normalized, de-duplicated and correlated to incidents. The page shows throughput, latency percentiles, consumer lag, duplicates, failures and broker health.*
 
 ![Signals](images/13-pipeline-signals.png)
 
-*Image 13. Every accepted signal with its outcome: alerts, a log error and a metric threshold processed, and one signal dead-lettered. Redelivered events are recognised and suppressed rather than creating duplicates.*
+*Image 9. Every accepted signal with its outcome: alerts, a log error and a metric threshold processed, and one signal dead-lettered. Redelivered events are recognised and suppressed rather than creating duplicates.*
 
 ![Dead letters](images/14-pipeline-dead-letters.png)
 
-*Image 14. A malformed signal ends up here with the reason, the attempt count and a safe preview of the payload, never the raw secret-bearing body. Operators can replay it once the cause is fixed.*
+*Image 10. A malformed signal ends up here with the reason, the attempt count and a safe preview of the payload, never the raw secret-bearing body. Operators can replay it once the cause is fixed.*
 
-## 7. Security and operations
+## 5. Security and operations
 
 ![Audit log](images/15-audit-log.png)
 
-*Image 15. An append-only audit log. Each event carries an HMAC integrity hash, database triggers reject updates and deletes, and a verification job recomputes the hashes. Secrets and tokens are never recorded.*
+*Image 11. An append-only audit log. Each event carries an HMAC integrity hash, database triggers reject updates and deletes, and a verification job recomputes the hashes. Secrets and tokens are never recorded.*
 
 ![Members and roles](images/16-members-and-roles.png)
 
-*Image 16. Workspace-scoped roles enforced on the server for every route, with invitations, and a guard that keeps a workspace from losing its last owner. API keys are scoped and stored only as hashes.*
+*Image 12. Workspace-scoped roles enforced on the server for every route, with invitations, and a guard that keeps a workspace from losing its last owner. API keys are scoped and stored only as hashes.*
 
-![Services](images/17-services.png)
-
-*Image 17. The services a workspace monitors. Everything in the application is scoped to a workspace, and a request for another tenant's resource is indistinguishable from a request for something that does not exist.*
-
-## 8. Evaluation gates for the LLM
+## 6. Evaluation gates for the LLM
 
 ![LLMOps overview](images/18-llmops-overview.png)
 
-*Image 18. Every change to a prompt or model is evaluated against a 104-case golden dataset before it can be published. The trend shows two baseline runs near 99% and a deliberately broken variant dropping to 39%.*
+*Image 13. Every change to a prompt or model is evaluated against a 104-case golden dataset before it can be published. The trend shows two baseline runs near 99% and a deliberately broken variant dropping to 39%.*
 
 ![Evaluation runs](images/19-llmops-evaluations.png)
 
-*Image 19. Runs are started from the console and executed by the worker. Each run records the dataset version, variant, purpose and pass counts. Token and latency figures are labelled "synthetic (not measured)" because this run uses the deterministic provider.*
+*Image 14. Runs are started from the console and executed by the worker. Each run records the dataset version, variant, purpose and pass counts. Token and latency figures are labelled "synthetic (not measured)" because this run uses the deterministic provider.*
 
 ![A regression the gate catches](images/20-llmops-regression-blocked.png)
 
-*Image 20. The regressing variant passes 41 of 104 cases, and the hard safety gates fail: zero tenant leaks (5 violations) and zero secret leaks (4 violations). Hard gates can never be overridden, so this prompt could not be published.*
+*Image 15. The regressing variant passes 41 of 104 cases, and the hard safety gates fail: zero tenant leaks (5 violations) and zero secret leaks (4 violations). Hard gates can never be overridden, so this prompt could not be published.*
 
 These runs use the deterministic provider, so they test the harness, the graders and the gates, not the quality of a real model.
 
@@ -116,7 +92,7 @@ These runs use the deterministic provider, so they test the harness, the graders
 
 ![Real-model evaluation](images/21-real-model-eval.png)
 
-*Image 21. The two real-model runs side by side. The report command writes files rather than database rows, so this card is rendered from the two reports (source: `docs/real-model-eval-card.html`).*
+*Image 16. The two real-model runs side by side. The report command writes files rather than database rows, so this card is rendered from the two reports (source: `docs/real-model-eval-card.html`).*
 
 ## How it is built
 
@@ -145,26 +121,21 @@ It runs locally with Docker Compose and in GitHub Actions. It has **not** been d
 | # | File | Caption in one line |
 | --- | --- | --- |
 | 0 | `docs/architecture-diagram.png` | Architecture |
-| 1 | `images/01-sign-in.png` | OIDC sign-in |
-| 2 | `images/02-overview.png` | Live overview |
-| 3 | `images/03-incidents.png` | Incident list |
-| 4 | `images/04-incident-detail.png` | Incident detail |
-| 5 | `images/05-incident-timeline.png` | Timeline |
-| 6 | `images/06-investigation-steps.png` | Investigation workflow |
-| 7 | `images/07-investigation-report.png` | Investigation report |
-| 8 | `images/08-human-review-gate.png` | Human review gate |
-| 9 | `images/09-investigation-rejected.png` | A rejected investigation |
-| 10 | `images/10-incident-resolved-lifecycle.png` | Resolved incident |
-| 11 | `images/11-pipeline-overview.png` | Pipeline overview |
-| 12 | `images/12-pipeline-sources.png` | Sources |
-| 13 | `images/13-pipeline-signals.png` | Signals |
-| 14 | `images/14-pipeline-dead-letters.png` | Dead letters |
-| 15 | `images/15-audit-log.png` | Audit log |
-| 16 | `images/16-members-and-roles.png` | Members and roles |
-| 17 | `images/17-services.png` | Services |
-| 18 | `images/18-llmops-overview.png` | LLM quality trend |
-| 19 | `images/19-llmops-evaluations.png` | Evaluation runs |
-| 20 | `images/20-llmops-regression-blocked.png` | Regression caught by hard gates |
-| 21 | `images/21-real-model-eval.png` | Real-model evaluation, before and after the fix |
+| 1 | `images/02-overview.png` | Overview |
+| 2 | `images/04-incident-detail.png` | Incident detail |
+| 3 | `images/06-investigation-steps.png` | Investigation steps |
+| 4 | `images/07-investigation-report.png` | Investigation report |
+| 5 | `images/08-human-review-gate.png` | Human review gate |
+| 6 | `images/09-investigation-rejected.png` | A rejected investigation |
+| 7 | `images/10-incident-resolved-lifecycle.png` | A resolved incident |
+| 8 | `images/11-pipeline-overview.png` | Pipeline overview |
+| 9 | `images/13-pipeline-signals.png` | Signals |
+| 10 | `images/14-pipeline-dead-letters.png` | Dead letters |
+| 11 | `images/15-audit-log.png` | Audit log |
+| 12 | `images/16-members-and-roles.png` | Members and roles |
+| 13 | `images/18-llmops-overview.png` | LLMOps overview |
+| 14 | `images/19-llmops-evaluations.png` | Evaluation runs |
+| 15 | `images/20-llmops-regression-blocked.png` | A regression the gate catches |
+| 16 | `images/21-real-model-eval.png` | Real-model evaluation |
 
 Regenerate the screenshots with `node apps/web/scripts/capture-screenshots.mjs` against a stack that has the demo data.

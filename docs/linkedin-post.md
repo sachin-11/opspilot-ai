@@ -1,6 +1,6 @@
 # LinkedIn post (copy and paste)
 
-Attach images in this order: 0 (architecture), 8 (human review gate), 2 (overview), 7 (report), 21 (real-model evaluation, before and after), 14 (dead letters). Image 20 (the evaluation gate catching a regression) is a good alternative. Put the full walkthrough in the comments or as an article (`docs/project-article.md`).
+Attach images in this order: `docs/architecture-diagram.png`, `08-human-review-gate`, `02-overview`, `07-investigation-report`, `21-real-model-eval`, `14-pipeline-dead-letters`. `20-llmops-regression-blocked` is a good alternative to the real-model card. Put the full walkthrough (`docs/project-article.md`) in the comments or as a LinkedIn article.
 
 ---
 
