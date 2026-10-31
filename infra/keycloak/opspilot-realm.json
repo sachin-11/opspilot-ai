@@ -63,7 +63,8 @@
           "value": "owner-local-password",
           "temporary": false
         }
-      ]
+      ],
+      "id": "25bde17d-d72a-47dd-99dc-da7928ac96cd"
     },
     {
       "username": "responder@example.com",
@@ -78,7 +79,8 @@
           "value": "responder-local-password",
           "temporary": false
         }
-      ]
+      ],
+      "id": "7b1d3c52-9f0e-4a3b-8c21-5d6e7f8a9b01"
     },
     {
       "username": "e2e@example.com",
@@ -93,7 +95,8 @@
           "value": "e2e-local-password",
           "temporary": false
         }
-      ]
+      ],
+      "id": "9c08bc46-dab6-488a-9f12-88eb218e5844"
     }
   ]
 }

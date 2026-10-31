@@ -422,7 +422,7 @@ To exercise the real sign-in flow (email and password on the identity provider's
 docker compose --profile idp up -d keycloak
 ```
 
-Keycloak is stateless here: it imports `infra/keycloak/opspilot-realm.json` on every start (admin-console changes are not persisted): realm `opspilot`, public client `opspilot-web` (Authorization Code + PKCE S256, callback `http://localhost:3300/api/auth/callback`), an audience mapper so access tokens carry `aud=opspilot-web`, and two throwaway users (`owner@example.com` / `owner-local-password`, `responder@example.com` / `responder-local-password`). The admin console is at `http://localhost:8180` (user `admin`, password `KEYCLOAK_ADMIN_PASSWORD`). Then set, in `.env`, and recreate `api` and `web`:
+Keycloak is stateless here: it imports `infra/keycloak/opspilot-realm.json` on every start (admin-console changes are not persisted). The users have **fixed IDs** in that file on purpose: the application identifies a person by the provider's immutable `sub`, so without them every restart would mint a new identity for the same email, and that person would lose access to their workspaces: realm `opspilot`, public client `opspilot-web` (Authorization Code + PKCE S256, callback `http://localhost:3300/api/auth/callback`), an audience mapper so access tokens carry `aud=opspilot-web`, and two throwaway users (`owner@example.com` / `owner-local-password`, `responder@example.com` / `responder-local-password`). The admin console is at `http://localhost:8180` (user `admin`, password `KEYCLOAK_ADMIN_PASSWORD`). Then set, in `.env`, and recreate `api` and `web`:
 
 ```
 AUTH_PROVIDER=oidc
