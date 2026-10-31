@@ -317,3 +317,36 @@ describe("mobile layout", () => {
     expect(css).toMatch(/\.auth-card/);
   });
 });
+
+describe("first workspace", () => {
+  const NEW_WS = "22222222-2222-4222-8222-222222222222";
+  beforeEach(() => { ops.value.workspace = null; ops.value.workspaces = []; ops.value.role = null; ops.value.permissions = []; });
+  afterEach(() => {
+    ops.value.workspace = {id: WS, name: "Acme"};
+    ops.value.workspaces = [{id: WS, name: "Acme"}];
+  });
+
+  it("lets a user without a workspace create one, then selects it", async () => {
+    const created = {id: NEW_WS, name: "Platform", slug: "platform", created_at: now, updated_at: now};
+    const {calls} = mockFetch((url, init) => url.endsWith("/api/v1/workspaces") && init?.method === "POST" ? json(created, 201) : undefined);
+    render(<AppShell><p>content</p></AppShell>, {wrapper});
+    expect(screen.getByRole("heading", {name: "No workspace yet"})).toBeInTheDocument();
+    expect(screen.queryByText("content")).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Workspace name"), "  Platform ");
+    await userEvent.click(screen.getByRole("button", {name: "Create workspace"}));
+    await waitFor(() => expect(ops.value.selectWorkspace).toHaveBeenCalledWith(NEW_WS));
+    expect(ops.value.refreshMemberships).toHaveBeenCalled();
+    const post = calls.find((call) => call.method === "POST");
+    expect(post?.body).toEqual({name: "Platform"});
+    expect(post?.headers["X-CSRF-Token"]).toBe("csrf-xyz");
+  });
+
+  it("shows the API error and stays on the form when creation fails", async () => {
+    mockFetch((url, init) => url.endsWith("/api/v1/workspaces") && init?.method === "POST" ? json({error: {message: "workspace slug already exists"}}, 409) : undefined);
+    render(<AppShell><p>content</p></AppShell>, {wrapper});
+    await userEvent.type(screen.getByLabelText("Workspace name"), "Taken");
+    await userEvent.click(screen.getByRole("button", {name: "Create workspace"}));
+    expect(await screen.findByRole("alert")).toHaveTextContent("workspace slug already exists");
+    expect(screen.getByRole("button", {name: "Create workspace"})).toBeEnabled();
+  });
+});

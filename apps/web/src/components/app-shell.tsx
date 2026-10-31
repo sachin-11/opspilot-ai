@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { setCsrfToken } from "@/lib/api";
+import { api, ApiError, setCsrfToken } from "@/lib/api";
 import { can, NAV_PERMISSIONS, ROLE_LABELS } from "@/lib/permissions";
 import { useOps } from "./providers";
 
@@ -41,6 +42,25 @@ export function AppShell({children}: {children: React.ReactNode}) {
 }
 
 function EmptyWorkspace() {
-  const {user} = useOps();
-  return <section className="panel" role="alert"><h2>No workspace access</h2><p>{user?.email ?? "This account"} is not a member of any workspace. Ask a workspace owner for an invitation, or run the development bootstrap command.</p><code>docker compose exec api python -m opspilot_api.auth.bootstrap_dev</code></section>;
+  const {baseUrl, user, selectWorkspace, refreshMemberships} = useOps();
+  const [error, setError] = useState("");
+  const create = useMutation({
+    mutationFn: (name: string) => api.createWorkspace(baseUrl, {name}),
+    onSuccess: async (created) => { setError(""); await refreshMemberships(); selectWorkspace(created.id); },
+    onError: (failure) => setError(failure instanceof ApiError ? failure.message : "Could not create the workspace. Try again."),
+  });
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = String(new FormData(event.currentTarget).get("name") ?? "").trim();
+    if (name) create.mutate(name);
+  }
+  return <section className="panel form" aria-labelledby="no-workspace-title">
+    <h2 id="no-workspace-title">No workspace yet</h2>
+    <p>{user?.email ?? "This account"} is not a member of any workspace. Ask a workspace owner for an invitation, or create your own workspace and become its owner.</p>
+    <form className="form" onSubmit={submit}>
+      <label>Workspace name<input name="name" maxLength={120} required /></label>
+      {error && <p role="alert" className="error">{error}</p>}
+      <button className="button primary" disabled={create.isPending}>{create.isPending ? "Creating…" : "Create workspace"}</button>
+    </form>
+  </section>;
 }
