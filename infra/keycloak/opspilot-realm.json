@@ -79,6 +79,21 @@
           "temporary": false
         }
       ]
+    },
+    {
+      "username": "e2e@example.com",
+      "email": "e2e@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Eddie",
+      "lastName": "E2E",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "e2e-local-password",
+          "temporary": false
+        }
+      ]
     }
   ]
 }

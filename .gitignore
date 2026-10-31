@@ -40,3 +40,6 @@ services/api/benchmark-results/
 evaluation-reports/
 # Database backups (contain customer data)
 backups/
+# Playwright output
+apps/web/playwright-report/
+apps/web/test-results/
