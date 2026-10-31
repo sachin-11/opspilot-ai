@@ -22,11 +22,11 @@ jobs:
       # Public, non-secret build-time value.
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8300
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: apps/web/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -96,8 +96,8 @@ jobs:
       # Throwaway Fernet key for ephemeral CI containers; not a real secret.
       OBS_SECRET_ENCRYPTION_KEY: mzn9nB8mYQ4Qd1yq0Z3sT0w6mYJm5J7B7xk3T4p8o9U=
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: services/api/uv.lock
@@ -151,7 +151,7 @@ jobs:
         run: uv run python -m opspilot_api.llmops.cli compare --out evaluation-reports
       - name: Upload LLMOps evaluation reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: llmops-evaluation-reports
           path: services/api/evaluation-reports/
@@ -180,5 +180,5 @@ jobs:
     name: Docker Compose config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker compose --env-file .env.example config --quiet

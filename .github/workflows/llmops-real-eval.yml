@@ -50,8 +50,8 @@ jobs:
       LLMOPS_REAL_EVAL_ENABLED: "true"
       LLMOPS_REAL_EVAL_MAX_COST_USD: ${{ inputs.max_cost_usd }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: services/api/uv.lock
@@ -65,7 +65,7 @@ jobs:
           --input-per-million "${{ inputs.input_per_million }}"
           --output-per-million "${{ inputs.output_per_million }}"
           --out evaluation-reports
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: llmops-real-eval-report
