@@ -15,6 +15,7 @@ from opspilot_api.auth.router import router as auth_router
 from opspilot_api.config import APP_NAME, APP_VERSION, Settings, get_settings
 from opspilot_api.errors import register_exception_handlers
 from opspilot_api.health.router import router as health_router
+from opspilot_api.http_metrics import HttpMetricsMiddleware
 from opspilot_api.incidents.router import router as incidents_router
 from opspilot_api.infrastructure import (
     create_db_engine,
@@ -86,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.add_middleware(EventPayloadLimitMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(HttpMetricsMiddleware)  # outermost: measures everything above
 
     register_exception_handlers(app)
     app.include_router(health_router)
