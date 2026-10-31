@@ -214,6 +214,47 @@ def test_real_call_maps_structured_output_and_prices_from_usage() -> None:
     assert system.spent_usd == pytest.approx(out.estimated_cost_usd or 0)
 
 
+def test_prompt_defines_every_field_the_triage_grader_requires() -> None:
+    """A real run once scored 0/10 because the model was not allowed to return impact_assessment
+    and was never told the category or urgency vocabulary, so no triage case could pass."""
+    required = next(c for c in golden_cases() if c.suite == "triage").expected_output[
+        "required_fields"
+    ]
+    for field in required:
+        assert field in real_eval.RealAnswer.model_fields, field
+        assert field in real_eval._FORMAT_INSTRUCTION, field
+    for label in (
+        "security",
+        "outage",
+        "data_issue",
+        "capacity",
+        "service_degradation",
+        "unknown",
+        "critical",
+        "high",
+        "medium",
+        "low",
+    ):
+        assert label in real_eval._FORMAT_INSTRUCTION, label
+
+
+def test_impact_assessment_reaches_the_graded_output() -> None:
+    case = _case("triage")
+    client = _client(
+        {
+            "abstained": False,
+            "answer": "api is down",
+            "category": "outage",
+            "urgency": "high",
+            "impact_assessment": "Customers cannot check out.",
+        }
+    )
+    system = real_eval.AnthropicEvalSystem(client, model="m", rate=RATE, max_cost_usd=1.0)
+    out = system(case)
+    assert out.output["impact_assessment"] == "Customers cannot check out."
+    assert out.output["category"] == "outage" and out.output["urgency"] == "high"
+
+
 def test_reasoning_fields_and_malformed_output_are_not_accepted() -> None:
     case = _case()
     bad = real_eval.AnthropicEvalSystem(_client("not json"), model="m", rate=RATE, max_cost_usd=1.0)

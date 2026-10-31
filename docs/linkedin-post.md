@@ -25,6 +25,7 @@ What building it taught me about "dependable":
 • My own tests found real bugs: a database outage returned HTTP 500 instead of a retryable 503, and a layout bug hid the Sign out button on short screens
 • A load test showed one API container holds up at 30 req/s on my laptop and degrades before 100. I wrote that down instead of guessing
 • Backups only count once you have restored one, so the repo has a restore drill
+• My first real-model evaluation (Claude Haiku, 10 triage cases, about ten cents) scored 0 of 10. The model was fine: my eval adapter did not allow it to return a field the grader requires. Fixed, with a regression test, then 10 of 10. It is a tiny, non-held-out sample, so I call it a smoke test, not a benchmark
 
 450+ backend tests, ~200 frontend tests, Playwright end-to-end tests through a real OIDC login, dependency and container scanning, and a drill that stops Postgres and Redis.
 

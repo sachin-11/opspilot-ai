@@ -59,6 +59,7 @@ class RealAnswer(BaseModel):
     answer: str = Field(default="", max_length=4000)
     category: str | None = None
     urgency: str | None = None
+    impact_assessment: str = Field(default="", max_length=1000)
     cited_evidence_ids: list[str] = Field(default_factory=list, max_length=50)
     ranked_ids: list[str] = Field(default_factory=list, max_length=50)
     suspect_change_ids: list[str] = Field(default_factory=list, max_length=50)
@@ -66,12 +67,22 @@ class RealAnswer(BaseModel):
     remediation_actions: list[str] = Field(default_factory=list, max_length=20)
 
 
+# The label vocabularies below are the task specification (what the output fields mean), the same
+# for every case. They contain no case-specific answers.
 _FORMAT_INSTRUCTION = (
     "Reply with a single JSON object and nothing else, using only these keys: abstained (bool), "
-    "answer (string), category, urgency, cited_evidence_ids (list of ids that appear in the "
-    "input), ranked_ids (most relevant first), suspect_change_ids (most suspicious first), "
-    "tool_calls (list of {name, arguments}), remediation_actions (list of strings). Abstain when "
-    "evidence is insufficient. Never include reasoning steps."
+    "answer (string), category, urgency, impact_assessment (one sentence on who or what is "
+    "affected), cited_evidence_ids (list of ids that appear in the input), ranked_ids (most "
+    "relevant first), suspect_change_ids (most suspicious first), tool_calls (list of {name, "
+    "arguments}), remediation_actions (list of strings). "
+    "When classifying an incident, category must be exactly one of: security (unauthorized "
+    "access, leaked credentials, intrusion), outage (a service is down or returning errors), "
+    "data_issue (missing, duplicate, stale or inconsistent data), capacity (CPU, memory or disk "
+    "exhaustion, throttling), service_degradation (slowness, latency or timeouts), unknown (too "
+    "vague to classify). urgency must be exactly one of critical, high, medium, low, and follows "
+    "the incident severity: sev1 critical, sev2 high, sev3 medium, sev4 low. "
+    "Set abstained to true only when the input is too vague or incomplete to answer; otherwise "
+    "answer. Never include reasoning steps."
 )
 
 

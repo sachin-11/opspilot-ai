@@ -110,7 +110,9 @@ OpsPilot is my attempt at the middle path. The AI does the reading and proposes 
 
 *Image 20. The regressing variant passes 41 of 104 cases, and the hard safety gates fail: zero tenant leaks (5 violations) and zero secret leaks (4 violations). Hard gates can never be overridden, so this prompt could not be published.*
 
-These runs use the deterministic provider, so they test the harness, the graders and the gates, not the quality of a real model. A separate, capped, opt-in command evaluates a real model.
+These runs use the deterministic provider, so they test the harness, the graders and the gates, not the quality of a real model.
+
+**A first real-model check.** A separate, capped, opt-in command sends redacted golden cases to a real model. I ran it with Claude Haiku on 10 triage cases for roughly ten US cents. It first scored **0 of 10**. The cause was not the model: my evaluation adapter forbade the model from returning a field the grader requires and never defined the label vocabulary, so those cases could not pass by construction, something the offline runs could never reveal. After fixing the adapter (with a regression test) the same cases scored **10 of 10**. That is a small sample and the prompt was adjusted after seeing those failures, so I treat it as a smoke test that proved the harness and the model now agree, not as a benchmark. Both reports and the caveats are in [real-model-eval.md](real-model-eval.md).
 
 ## How it is built
 
