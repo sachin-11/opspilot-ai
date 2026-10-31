@@ -1,0 +1,84 @@
+{
+  "realm": "opspilot",
+  "enabled": true,
+  "displayName": "OpsPilot AI (local development)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 900,
+  "clients": [
+    {
+      "clientId": "opspilot-web",
+      "name": "OpsPilot web",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3300/api/auth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3300/*"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "web-origins",
+        "profile",
+        "email",
+        "roles"
+      ],
+      "protocolMappers": [
+        {
+          "name": "opspilot-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "opspilot-web",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "owner@example.com",
+      "email": "owner@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Olivia",
+      "lastName": "Owner",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "owner-local-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "responder@example.com",
+      "email": "responder@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Riya",
+      "lastName": "Responder",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "responder-local-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

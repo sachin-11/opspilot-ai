@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { setCsrfToken } from "@/lib/api";
+import { api, ApiError, setCsrfToken } from "@/lib/api";
 import { can, NAV_PERMISSIONS, ROLE_LABELS } from "@/lib/permissions";
 import { useOps } from "./providers";
 
@@ -25,7 +26,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const visible = links.filter(([href]) => can(ops, NAV_PERMISSIONS[href] ?? "workspace.read"));
   return <div className="app-shell">
     <aside className="sidebar">
-      <div>
+      <div className="sidebar-header">
         <p className="eyebrow">OpsPilot AI</p><h1>Operations</h1>
         {workspaces.length > 1
           ? <label className="workspace-select">Workspace<select aria-label="Workspace" value={workspace?.id ?? ""} onChange={(event) => selectWorkspace(event.target.value)}>{workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -33,14 +34,35 @@ export function AppShell({children}: {children: React.ReactNode}) {
         {user && <p className="muted current-user" aria-label="Signed in user">{user.display_name ?? user.email ?? "Signed in"}{role ? ` · ${ROLE_LABELS[role] ?? role}` : ""}</p>}
       </div>
       <nav aria-label="Primary navigation">{visible.map(([href, label]) => <Link key={href} href={href} className={path === href || (href === "/knowledge" && path.startsWith("/knowledge/") && path !== "/knowledge/search") || (href === "/repositories" && path.startsWith("/repositories/") && path !== "/repositories/search") || (href === "/remediations" && path.startsWith("/remediations/")) || (href === "/llmops" && path.startsWith("/llmops")) ? "active" : ""}>{label}</Link>)}</nav>
-      <p className={`connection ${connection}`}><span aria-hidden="true">●</span> Realtime {connection}</p>
-      <button className="button" onClick={() => void logout()} disabled={signingOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
+      <div className="sidebar-footer">
+        <p className={`connection ${connection}`}><span aria-hidden="true">●</span> Realtime {connection}</p>
+        <button className="button" onClick={() => void logout()} disabled={signingOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
+      </div>
     </aside>
     <main className="content">{workspace ? children : <EmptyWorkspace />}</main>
   </div>;
 }
 
 function EmptyWorkspace() {
-  const {user} = useOps();
-  return <section className="panel" role="alert"><h2>No workspace access</h2><p>{user?.email ?? "This account"} is not a member of any workspace. Ask a workspace owner for an invitation, or run the development bootstrap command.</p><code>docker compose exec api python -m opspilot_api.auth.bootstrap_dev</code></section>;
+  const {baseUrl, user, selectWorkspace, refreshMemberships} = useOps();
+  const [error, setError] = useState("");
+  const create = useMutation({
+    mutationFn: (name: string) => api.createWorkspace(baseUrl, {name}),
+    onSuccess: async (created) => { setError(""); await refreshMemberships(); selectWorkspace(created.id); },
+    onError: (failure) => setError(failure instanceof ApiError ? failure.message : "Could not create the workspace. Try again."),
+  });
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = String(new FormData(event.currentTarget).get("name") ?? "").trim();
+    if (name) create.mutate(name);
+  }
+  return <section className="panel form" aria-labelledby="no-workspace-title">
+    <h2 id="no-workspace-title">No workspace yet</h2>
+    <p>{user?.email ?? "This account"} is not a member of any workspace. Ask a workspace owner for an invitation, or create your own workspace and become its owner.</p>
+    <form className="form" onSubmit={submit}>
+      <label>Workspace name<input name="name" maxLength={120} required /></label>
+      {error && <p role="alert" className="error">{error}</p>}
+      <button className="button primary" disabled={create.isPending}>{create.isPending ? "Creating…" : "Create workspace"}</button>
+    </form>
+  </section>;
 }

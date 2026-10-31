@@ -169,11 +169,27 @@ describe("API proxy", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const cookie = await cookieFor();
-    for (const path of [["health", "live"], ["api", "v1", "auth", "local", "token"], ["api", "v1", "..", "secret"]]) {
+    for (const path of [["health", "other"], ["api", "v1", "auth", "local", "token"], ["api", "v1", "..", "secret"]]) {
       const response = await proxyGet(new NextRequest(`${ORIGIN}/api/proxy/${path.join("/")}`, {headers: {cookie}}), ctx(path));
       expect(response.status).toBe(404);
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards only the public GET health endpoints, without a session or a token", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({status: "degraded"}), {status: 503, headers: {"content-type": "application/json"}}));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await proxyGet(new NextRequest(`${ORIGIN}/api/proxy/health/ready`), ctx(["health", "ready"]));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({status: "degraded"});
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://api:8000/health/ready");
+    expect(init.headers).toBeUndefined();
+    // Mutating methods and other health-like paths stay blocked.
+    const post = await proxyPost(new NextRequest(`${ORIGIN}/api/proxy/health/ready`, {method: "POST", body: "{}"}), ctx(["health", "ready"]));
+    expect(post.status).toBe(404);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("passes through 403, 404, and 429 distinctly with Retry-After", async () => {

@@ -412,6 +412,32 @@ OIDC_ISSUER=<same issuer as the API>  OIDC_JWKS_URL=<issuer>/.well-known/jwks.js
 
 Register `https://app.example.com/api/auth/callback` as the callback URL. Invitation acceptance compares the invitation email with a **verified** email claim, so configure the pool so that the verified `email` appears in the token your API validates (or set `AUTH_OIDC_TOKEN_USE=id`).
 
+### Local OIDC with Keycloak (optional)
+
+To exercise the real sign-in flow (email and password on the identity provider's own page, no "Continue as ..." buttons) without any cloud account, start the optional Keycloak container. It uses compose profile `idp`, so a normal `docker compose up` never starts it.
+
+```
+docker compose --profile idp up -d keycloak
+```
+
+Keycloak is stateless here: it imports `infra/keycloak/opspilot-realm.json` on every start (admin-console changes are not persisted): realm `opspilot`, public client `opspilot-web` (Authorization Code + PKCE S256, callback `http://localhost:3300/api/auth/callback`), an audience mapper so access tokens carry `aud=opspilot-web`, and two throwaway users (`owner@example.com` / `owner-local-password`, `responder@example.com` / `responder-local-password`). The admin console is at `http://localhost:8180` (user `admin`, password `KEYCLOAK_ADMIN_PASSWORD`). Then set, in `.env`, and recreate `api` and `web`:
+
+```
+AUTH_PROVIDER=oidc
+AUTH_OIDC_ISSUER=http://localhost:8180/realms/opspilot
+AUTH_OIDC_AUDIENCE=opspilot-web
+AUTH_OIDC_JWKS_URL=http://keycloak:8080/realms/opspilot/protocol/openid-connect/certs
+
+AUTH_MODE=oidc
+OIDC_CLIENT_ID=opspilot-web
+OIDC_AUTHORIZATION_URL=http://localhost:8180/realms/opspilot/protocol/openid-connect/auth
+OIDC_TOKEN_URL=http://keycloak:8080/realms/opspilot/protocol/openid-connect/token
+OIDC_ISSUER=http://localhost:8180/realms/opspilot
+OIDC_JWKS_URL=http://keycloak:8080/realms/opspilot/protocol/openid-connect/certs
+```
+
+The browser-facing URLs use `localhost`; the server-to-server URLs (token, JWKS) use the Compose service name `keycloak`. A new user has no workspace until they create one (they become its Owner) or accept an invitation sent to their verified email. `AUTH_OIDC_JWKS_URL` is only needed for providers that do not serve `<issuer>/.well-known/jwks.json` (Keycloak, Auth0, Okta); Cognito does not need it. Outside development both the issuer and the JWKS URL must be https. Keycloak here is a development convenience: production should use a managed provider (Cognito, Auth0, Okta, Entra ID) or a hardened, persistent Keycloak deployment.
+
 ### Local-auth mode
 
 `AUTH_PROVIDER=local` (the default for development/test) uses deterministic signed tokens and a tiny dev-only OIDC-shaped IdP (`/api/v1/auth/local/*`: authorization-code + PKCE) with five users (`owner`, `admin`, `responder`, `analyst`, `viewer`). **Settings validation, provider construction, and token issuance all refuse it outside development/test**, so the application cannot start with local auth in production or staging. CI uses only this provider.

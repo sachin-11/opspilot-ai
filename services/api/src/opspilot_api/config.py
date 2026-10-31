@@ -210,6 +210,9 @@ class Settings(BaseSettings):
     AUTH_OIDC_ISSUER: str | None = None
     # Expected audience; for Cognito access tokens this is the app client ID (``client_id`` claim).
     AUTH_OIDC_AUDIENCE: str | None = None
+    # Optional explicit JWKS URL for providers that do not publish
+    # ``<issuer>/.well-known/jwks.json`` (Keycloak, Auth0, Okta). Cognito needs none.
+    AUTH_OIDC_JWKS_URL: str | None = None
     AUTH_OIDC_ALGORITHMS: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["RS256"])
     # ``access`` (Cognito access token) or ``id``; compared with the ``token_use`` claim.
     AUTH_OIDC_TOKEN_USE: str = Field(default="access", pattern="^(access|id)$")
@@ -357,6 +360,10 @@ class Settings(BaseSettings):
                 raise ValueError("AUTH_OIDC_ISSUER and AUTH_OIDC_AUDIENCE are required for oidc")
             if not self.AUTH_OIDC_ISSUER.startswith("https://") and local_allowed is False:
                 raise ValueError("AUTH_OIDC_ISSUER must be https outside development")
+            if self.AUTH_OIDC_JWKS_URL:
+                scheme = "https://" if not local_allowed else "http"
+                if not self.AUTH_OIDC_JWKS_URL.startswith(scheme):
+                    raise ValueError("AUTH_OIDC_JWKS_URL must be https outside development")
             if any(
                 alg.lower() in {"none", "hs256", "hs384", "hs512"}
                 for alg in self.AUTH_OIDC_ALGORITHMS
