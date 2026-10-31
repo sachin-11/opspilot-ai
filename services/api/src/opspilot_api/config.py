@@ -67,6 +67,17 @@ class Settings(BaseSettings):
 
     DEPENDENCY_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
 
+    # Connection pool of the API process. Each process holds up to POOL_SIZE + MAX_OVERFLOW
+    # connections, so size these against PostgreSQL max_connections across every process.
+    DB_POOL_SIZE: int = Field(default=10, ge=1, le=100)
+    DB_MAX_OVERFLOW: int = Field(default=10, ge=0, le=100)
+    # How long a request waits for a free connection before failing (instead of queueing forever).
+    DB_POOL_TIMEOUT_SECONDS: float = Field(default=10.0, gt=0, le=120)
+    # Recycle connections before a proxy or the server silently drops long-lived ones.
+    DB_POOL_RECYCLE_SECONDS: int = Field(default=1800, ge=60, le=86_400)
+    # Server-side cap on a single statement so one bad query cannot hold a connection forever.
+    DB_STATEMENT_TIMEOUT_SECONDS: int = Field(default=60, ge=1, le=3600)
+
     AI_PRIMARY_PROVIDER: str = Field(default="fake", min_length=1, max_length=50)
     AI_PRIMARY_MODEL: str = Field(default="deterministic-v1", min_length=1, max_length=120)
     AI_PRIMARY_API_KEY: SecretStr | None = None
