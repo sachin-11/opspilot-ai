@@ -25,6 +25,15 @@ updates:
     directory: /infra/docker
     schedule:
       interval: weekly
+    ignore:
+      # Runtime base images move deliberately, not by bot. The backend declares
+      # requires-python ">=3.12,<3.13", so newer Python images would not run it; Node major
+      # bumps (24 -> 25 is a non-LTS release) are chosen manually. Patch updates still arrive
+      # through the base image tag itself and the weekly Trivy scan.
+      - dependency-name: python
+        versions: [">=3.13"]
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
