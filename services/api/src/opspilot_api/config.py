@@ -6,13 +6,15 @@ credentials. Secrets are held as ``SecretStr`` so they never appear in
 """
 
 from enum import StrEnum
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from typing import Annotated, Self
 from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import URL
+
+from opspilot_api.auth.clientip import Network, parse_networks
 
 APP_NAME = "OpsPilot AI"
 SERVICE_NAME = "opspilot-api"
@@ -51,6 +53,9 @@ class Settings(BaseSettings):
     API_PORT: int = Field(default=8000, ge=1, le=65535)
     LOG_LEVEL: LogLevel = LogLevel.INFO
     CORS_ORIGINS: Annotated[list[str], NoDecode]
+    # Reverse proxies whose X-Forwarded-For is believed (comma-separated CIDRs). Empty means the
+    # header is ignored and the direct peer address is used, which is the safe default.
+    TRUSTED_PROXY_CIDRS: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     POSTGRES_DB: str = Field(min_length=1)
     POSTGRES_USER: str = Field(min_length=1)
@@ -246,6 +251,19 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @field_validator("TRUSTED_PROXY_CIDRS", mode="before")
+    @classmethod
+    def _split_proxy_cidrs(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("TRUSTED_PROXY_CIDRS")
+    @classmethod
+    def _check_proxy_cidrs(cls, values: list[str]) -> list[str]:
+        parse_networks(values)  # raises ValueError for malformed or match-everything networks
+        return values
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -387,6 +405,10 @@ class Settings(BaseSettings):
         if self.REMEDIATION_WRITE_PROVIDER == "github" and self.GITHUB_PROVIDER != "github":
             raise ValueError("REMEDIATION_WRITE_PROVIDER=github requires GITHUB_PROVIDER=github")
         return self
+
+    @cached_property
+    def trusted_proxy_networks(self) -> list[Network]:
+        return parse_networks(self.TRUSTED_PROXY_CIDRS)
 
     @property
     def database_url(self) -> URL:

@@ -22,4 +22,4 @@ RUN mkdir -p /app/data/knowledge && chown -R app:app /app/data
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER app
 EXPOSE 8000
-CMD ["uvicorn", "opspilot_api.asgi:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+CMD ["uvicorn", "opspilot_api.asgi:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--no-proxy-headers"]
