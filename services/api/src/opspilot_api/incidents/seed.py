@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from opspilot_api.auth.bootstrap_dev import bootstrap
 from opspilot_api.config import Environment as AppEnvironment
 from opspilot_api.config import get_settings
 from opspilot_api.incidents.models import (
@@ -149,6 +150,9 @@ async def seed() -> None:
                 ),
             )
             print(f"Seed complete. Workspace ID: {workspace.id}")
+        # Explicit users and memberships replace the old anonymous access (development only).
+        async with factory() as session:
+            print(await bootstrap(session, settings))
     finally:
         await engine.dispose()
 

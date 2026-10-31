@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request, status
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.dependencies import CurrentActor
 from opspilot_api.config import Settings
 from opspilot_api.incidents.service import publish_notification
 from opspilot_api.investigations.models import InvestigationStatus, ReviewAction
@@ -128,6 +129,7 @@ async def post_review(
     investigation_id: UUID,
     data: ReviewRequest,
     session: Session,
+    actor: CurrentActor,
 ) -> ActionResponse:
     settings: Settings = request.app.state.settings
     investigation = await require_investigation(session, workspace_id, investigation_id)
@@ -137,6 +139,7 @@ async def post_review(
         workspace_id,
         investigation_id,
         data,
+        actor,
     )
     enqueue_review_resume(settings, workspace_id, investigation_id, review.id)
     event_type = (

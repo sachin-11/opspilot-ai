@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.dependencies import CurrentActor
 from opspilot_api.config import Settings
 from opspilot_api.incidents.service import ConflictError
 from opspilot_api.logging_config import correlation_id_var
@@ -97,6 +98,7 @@ async def post_remediation(
     investigation_id: UUID,
     session: Session,
     provider: Provider,
+    actor: CurrentActor,
 ) -> RemediationQueuedResponse:
     settings: Settings = request.app.state.settings
     proposal = await create_remediation(
@@ -105,6 +107,7 @@ async def post_remediation(
         workspace_id,
         investigation_id,
         provider,
+        actor,
         correlation_id=correlation_id_var.get(),
     )
     enqueue_remediation(settings, workspace_id, proposal.id, proposal.graph_thread_id, "start")
@@ -138,10 +141,14 @@ async def get_remediation(
     "/workspaces/{workspace_id}/remediations/{remediation_id}/cancel", response_model=ActionResponse
 )
 async def post_cancel(
-    request: Request, workspace_id: UUID, remediation_id: UUID, session: Session
+    request: Request,
+    workspace_id: UUID,
+    remediation_id: UUID,
+    session: Session,
+    actor: CurrentActor,
 ) -> ActionResponse:
     proposal = await cancel_remediation(
-        session, workspace_id, remediation_id, correlation_id_var.get()
+        session, workspace_id, remediation_id, correlation_id_var.get(), actor
     )
     await notify(request, proposal, "remediation.cancelled")
     return _action(proposal)
@@ -158,10 +165,11 @@ async def post_retry(
     remediation_id: UUID,
     session: Session,
     provider: Provider,
+    actor: CurrentActor,
 ) -> RemediationQueuedResponse:
     settings: Settings = request.app.state.settings
     proposal = await retry_remediation(
-        session, settings, workspace_id, remediation_id, provider, correlation_id_var.get()
+        session, settings, workspace_id, remediation_id, provider, actor, correlation_id_var.get()
     )
     enqueue_remediation(settings, workspace_id, proposal.id, proposal.graph_thread_id, "start")
     await notify(request, proposal, "remediation.queued")
@@ -180,6 +188,7 @@ async def post_review(
     data: ReviewRequest,
     session: Session,
     provider: Provider,
+    actor: CurrentActor,
 ) -> ActionResponse:
     settings: Settings = request.app.state.settings
     outcome = await submit_review(
@@ -189,6 +198,7 @@ async def post_review(
         remediation_id,
         data,
         provider,
+        actor,
         correlation_id_var.get(),
     )
     if outcome.replay:
@@ -231,11 +241,15 @@ async def get_verification(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def post_publish(
-    request: Request, workspace_id: UUID, remediation_id: UUID, session: Session
+    request: Request,
+    workspace_id: UUID,
+    remediation_id: UUID,
+    session: Session,
+    actor: CurrentActor,
 ) -> PublishQueuedResponse:
     settings: Settings = request.app.state.settings
     result = await request_publish(
-        session, settings, workspace_id, remediation_id, correlation_id_var.get()
+        session, settings, workspace_id, remediation_id, actor, correlation_id_var.get()
     )
     if result.reverify:
         thread = new_thread_id(remediation_id)

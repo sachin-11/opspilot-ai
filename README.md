@@ -1,6 +1,6 @@
 # OpsPilot AI
 
-OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 6: evidence-backed remediation proposals, constrained patch generation, deterministic policy validation, isolated sandbox verification, explicit human approval, and GitHub fix pull requests**, built on the Module 0–5 foundation (incidents, investigations, runbook RAG, read-only GitHub integration, observability pipeline).
+OpsPilot AI is a multi-tenant incident-response platform. This repository contains **Module 7: OIDC authentication (AWS Cognito compatible), workspace memberships, centralized RBAC, scoped API keys, single-use WebSocket tickets, rate limiting, identity-backed approvals, and an append-only integrity-verified audit log**, on top of **Module 6: evidence-backed remediation proposals, constrained patch generation, deterministic policy validation, isolated sandbox verification, explicit human approval, and GitHub fix pull requests**, built on the Module 0–5 foundation (incidents, investigations, runbook RAG, read-only GitHub integration, observability pipeline).
 
 ## Module 3, 4, and 5 capabilities
 
@@ -298,7 +298,7 @@ What this shows, and what it does not: the requested 200 events/s was **not** re
 
 
 ### Module 5 limitations
-Workspace IDs are still not authentication; the metrics endpoint and webhook public IDs are unauthenticated by design (HMAC protects ingestion); webhook secrets are encrypted with a single environment key; the broker is single-node with replication factor 1 and no TLS/SASL (local development only); rate-limit and lag checks are best-effort and approximate; ordering is per workspace+service only; CloudWatch is verified with stubs, not real AWS; the local benchmark measures one laptop-class machine, not production capacity. Automated remediation, Slack, and production AWS deployment remain deferred.
+Webhook public IDs are unauthenticated by design (HMAC protects ingestion); the metrics endpoint now requires a signed-in user; webhook secrets are encrypted with a single environment key; the broker is single-node with replication factor 1 and no TLS/SASL (local development only); rate-limit and lag checks are best-effort and approximate; ordering is per workspace+service only; CloudWatch is verified with stubs, not real AWS; the local benchmark measures one laptop-class machine, not production capacity. Automated remediation, Slack, and production AWS deployment remain deferred.
 
 ## Remediation (Module 6)
 
@@ -376,11 +376,110 @@ uv run python -m opspilot_api.remediation.evaluation --dataset tests/fixtures/re
 - Patches are applied by a strict built-in unified-diff applier (no fuzz); only text files are supported. A commit's membership in the repository is checked through the provider, which for GitHub also resolves fork-network commits.
 - Only the fake generator ships; a real model adapter must keep the same structured-output contract and cannot weaken policy (the module treats all model output as untrusted).
 
+## Authentication and authorization (Module 7)
+
+Every endpoint is authenticated and authorized server-side. Public exceptions are only: `/health/live`, `/health/ready`, `/api/v1/meta`, the verified GitHub and generic ingestion webhooks (their workspace comes from server-side configuration, never the request), and the development-only local identity provider. A route that is not explicitly classified in `auth/route_policy.py` is denied (HTTP 403), and a test asserts that every registered route is classified.
+
+### Sign-in flow
+
+The browser uses OIDC **Authorization Code with PKCE (S256), state, and nonce**. The Next.js server (route handlers under `apps/web/src/app/api/auth`) starts the flow, validates `state`, exchanges the code, verifies the ID token (issuer, audience, signature, nonce), and stores the access token in a **sealed (AES-256-GCM JWE) HttpOnly cookie**. No token is ever in `localStorage`, HTML, URLs, or logs. The browser talks to the API only through a same-origin proxy (`/api/proxy`) that attaches the bearer token server-side. Cookie-authenticated mutations require a per-session **CSRF token** header plus a same-origin `Origin`. Return URLs are restricted to same-origin application paths. `proxy.ts` protects every page server-side; there are explicit login, logout, session-expired, access-denied, and auth-error pages. `next.config.ts` sets a practical Content Security Policy and security headers; cookies are `Secure` whenever `APP_BASE_URL` is https, `SameSite=Lax`.
+
+### AWS Cognito / OIDC configuration
+
+Backend (`AUTH_PROVIDER=oidc`; startup fails if anything is missing):
+
+```
+AUTH_PROVIDER=oidc
+AUTH_OIDC_ISSUER=https://cognito-idp.<region>.amazonaws.com/<user-pool-id>
+AUTH_OIDC_AUDIENCE=<app client id>      # matched against client_id (Cognito access tokens) or aud
+AUTH_OIDC_TOKEN_USE=access              # checked against the token_use claim
+AUTH_AUDIT_KEY=<32+ random characters>  # audit-log HMAC key (required outside development)
+```
+
+The JWKS URL is derived from the configured issuer only (`<issuer>/.well-known/jwks.json`); issuer and JWKS never come from a token or request. Tokens are verified with an explicit asymmetric algorithm allowlist (`AUTH_OIDC_ALGORITHMS`, default `RS256`; `none` and HMAC are refused), required `exp`/`sub`/`iss`, optional `nbf`, and clock-skew leeway. The JWKS is cached (`AUTH_JWKS_CACHE_SECONDS`) and refreshed at most once per unknown `kid` (rate-bounded, so rotation works and an attacker cannot hammer the IdP). Expired, invalid, and configuration errors are distinguished without leaking token data. The user is keyed by the immutable `sub`; email changes never create a new identity and a disabled user loses access on the next request.
+
+Web (server-side environment only):
+
+```
+AUTH_MODE=oidc
+APP_BASE_URL=https://app.example.com            # must be https outside localhost
+SESSION_SECRET=<32+ random characters>
+OIDC_CLIENT_ID=<app client id>
+OIDC_AUTHORIZATION_URL=https://<domain>.auth.<region>.amazoncognito.com/oauth2/authorize
+OIDC_TOKEN_URL=https://<domain>.auth.<region>.amazoncognito.com/oauth2/token
+OIDC_ISSUER=<same issuer as the API>  OIDC_JWKS_URL=<issuer>/.well-known/jwks.json
+```
+
+Register `https://app.example.com/api/auth/callback` as the callback URL. Invitation acceptance compares the invitation email with a **verified** email claim, so configure the pool so that the verified `email` appears in the token your API validates (or set `AUTH_OIDC_TOKEN_USE=id`).
+
+### Local-auth mode
+
+`AUTH_PROVIDER=local` (the default for development/test) uses deterministic signed tokens and a tiny dev-only OIDC-shaped IdP (`/api/v1/auth/local/*`: authorization-code + PKCE) with five users (`owner`, `admin`, `responder`, `analyst`, `viewer`). **Settings validation, provider construction, and token issuance all refuse it outside development/test**, so the application cannot start with local auth in production or staging. CI uses only this provider.
+
+Migrate existing anonymous demo data (idempotent; development only):
+
+```powershell
+docker compose exec api python -m opspilot_api.auth.bootstrap_dev     # or run the seed, which calls it
+```
+
+It creates the local users, makes `owner` the owner of every existing workspace, and gives each role a membership in `demo-operations`. Open http://localhost:3300 and choose a user on the sign-in page.
+
+### Roles and permissions
+
+| Permission | owner | admin | responder | analyst | viewer |
+|---|:-:|:-:|:-:|:-:|:-:|
+| `workspace.read`, `members.read`, `services.read`, `incidents.read`, `investigations.read`, `knowledge.read`, `integrations.read`, `observability.read`, `repositories.read`, `remediations.read` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `investigations.run` | ✓ | ✓ | ✓ | ✓ | |
+| `incidents.manage`, `services.manage`, `investigations.review`, `remediations.create`, `remediations.review` | ✓ | ✓ | ✓ | | |
+| `workspace.manage`, `members.manage`, `knowledge.manage`, `integrations.manage`, `observability.manage`, `repositories.manage`, `remediations.publish`, `api_keys.manage`, `audit.read` | ✓ | ✓ | | | |
+
+Owners additionally manage owner memberships (grant, change, remove); admins cannot touch owners or grant the owner role. Roles are per workspace. A workspace always keeps at least one active owner (the final owner cannot be removed, demoted, or suspended). Routes never check role names: they map to a permission in one central table, and sensitive domain services (membership, API keys, investigation review, remediation create/review/publish) **recheck the actor's permission themselves**. Unauthenticated requests get 401; a member lacking the permission gets 403; a non-member (or another tenant's resource) gets 404, indistinguishable from nonexistence. Revoked or suspended memberships stop authorizing on the next request.
+
+### Invitation lifecycle
+
+An owner/admin creates an invitation (`email`, `role`). The token (`secrets.token_urlsafe(32)`) is **returned once**; only its SHA-256 hash is stored, and the audit log never records the email or token. Invitations expire (`AUTH_INVITATION_TTL_HOURS`, default 72), are single use, can be revoked, and bind to the authenticated user who accepts with a **verified, normalized matching email**. Every failure returns the same error, so callers learn nothing about which emails or tokens exist. An invitation can never demote an existing owner.
+
+### API keys
+
+`ospk_<prefix>_<secret>` (256-bit secret) is shown once at creation or rotation; only a SHA-256 hash and the safe prefix are stored and compared in constant time. A key belongs to one workspace (resolved from the key record; a different workspace in the URL yields 404), may expire (capped by `AUTH_API_KEY_MAX_TTL_DAYS`), can be rotated or revoked, and `last_used_at` is updated at most every `AUTH_API_KEY_TOUCH_SECONDS`. Keys travel only in the `X-API-Key` header (never the query string) and cannot be combined with a bearer token. Scopes: `events:write`, `incidents:read`, `knowledge:read`, `investigations:read`. Each route lists the single scope that admits a key; **everything else, including member and key management, audit, remediation creation, approval, and publication, is human-only**.
+
+### WebSocket tickets
+
+`POST /api/v1/auth/ws-ticket {workspace_id, channel}` (user session + membership) returns a random ticket stored in Redis as a **hash** with a short TTL (`AUTH_WS_TICKET_TTL_SECONDS`, default 30), bound to user, workspace, membership, and channel. The socket (`/api/v1/ws/workspaces/{id}/incidents?ticket=`) consumes it atomically (`GETDEL`), so it is single use; reused, expired, wrong-workspace, wrong-channel, and forged tickets close with 4401. The server re-checks membership before subscribing and every few seconds afterwards, closing with 4403 on revocation, forwards only its own workspace's events, and enforces per-user connection and message-rate limits. Every reconnect obtains a new ticket. Tickets are never logged, and bearer tokens and API keys are not accepted on the socket.
+
+### Separation of duties
+
+- Approval and publication are separate permissions (`remediations.review` vs `remediations.publish`); responders may review but not publish.
+- The approver is the authenticated user, recorded server-side; client-supplied actor IDs are ignored. API keys and system actors can never review or publish.
+- A **high-risk** remediation cannot be approved by the user who requested it or who last requested a revision.
+- At publication (API and worker, "execution time") the system rechecks that the approver is still an active member holding `remediations.review` (and, for high risk, still not the requester/reviser) and that the publisher still holds `remediations.publish`. If the approver lost access, the approval is invalidated and the remediation returns to policy re-verification; if the publisher lost access, publication stops. Stale, expired, rejected, or changed-artifact approvals stay invalid (Module 6 binding).
+
+### Rate limiting
+
+Redis token buckets (atomic Lua), keyed by identity (user, API key, source public ID, or IP hash), with bounded key lifetimes. Rules cover authentication failures, API-key traffic, webhooks, investigation starts and other LLM operations, knowledge and repository search, remediation creation, review/publish attempts, WebSocket tickets and connections, and invitation creation/acceptance. Exceeding a limit returns `429` with `Retry-After`; internal keys are never exposed. If Redis is unreachable, **high-risk mutation rules fail closed** (429) while read-like rules fail open (availability over throttling). Counters `opspilot_rate_limit_allowed_total` / `_denied_total` are exported. `AUTH_RATE_LIMIT_MULTIPLIER` scales limits (the test suite relaxes it).
+
+### Audit log and integrity verification
+
+`GET /api/v1/workspaces/{id}/audit-events` (`audit.read`; filters `action`, `result`, `actor_user_id`, `since`, `until`; cursor pagination) lists append-only events: workspace creation, membership/invitation/API-key changes, integration configuration, dead-letter replay, investigation start/review, remediation creation/review/publication, permission denials, and rate-limit denials. Each event stores a hashed source IP, a bounded and scrubbed `metadata` (no tokens, keys, secrets, or emails), and an **HMAC-SHA256 integrity hash** keyed by `AUTH_AUDIT_KEY`. Database triggers reject `UPDATE` and `DELETE`; there is no update or delete endpoint. Membership and API-key audit rows are written in the same transaction as the change; sensitive routes (investigation/remediation/dead-letter/integration actions) write a pre-execution audit event and **refuse the action (503) if it cannot be recorded**.
+
+```powershell
+docker compose exec api python -m opspilot_api.auth.audit_verify [--workspace <uuid>]   # exit 1 on any mismatch
+```
+
+### Known limitations (Module 7)
+
+- Read requests and ordinary mutations are not individually audited (only security-relevant and sensitive actions are), and pre-execution audit events record authorization, not the action's final outcome.
+- The audit HMAC key is a single server secret: someone holding both the database and the key can forge events; use external log shipping or an HSM/KMS-backed key for stronger guarantees. Rotation of `AUTH_AUDIT_KEY` invalidates verification of older events.
+- No MFA, SCIM, enterprise SSO administration, or per-user session revocation list: a signed-in session lives until its access token expires (short-lived) although membership and user status are rechecked on every request.
+- `GET /api/v1/metrics` exposes process counters (no payloads) to any signed-in user; scrape it through a trusted network path.
+- Redis-backed rate limits are approximate under Redis failover; the local IdP is for development only.
+- Invitation email is not delivered by OpsPilot; the token is handed to the inviter once.
+
 ## Current security boundary
 
 Module 6 adds a controlled, approval-gated GitHub write path (branch, commit, pull request only); everything else below still holds.
 
-Workspace IDs in URLs scope every tenant-owned query, but **they are not authentication**. REST and WebSocket endpoints are intentionally unauthenticated. Do not expose this build as a production-secure multi-tenant service. Evidence and knowledge chunks are bounded and common secret forms are redacted, but this is defense in depth rather than complete DLP. Uploaded originals remain unredacted in private storage and local storage is not encrypted by the application. Incident/log/document content remains untrusted. Hidden chain-of-thought and full prompts are neither stored nor returned; only structured outputs, evidence references, concise summaries, and safe errors are persisted.
+Every API route requires an authenticated identity and a workspace membership with the route's permission (see Module 7). Workspace IDs in URLs are an input to authorization, not authentication. Evidence and knowledge chunks are bounded and common secret forms are redacted, but this is defense in depth rather than complete DLP. Uploaded originals remain unredacted in private storage and local storage is not encrypted by the application. Incident/log/document content remains untrusted. Hidden chain-of-thought and full prompts are neither stored nor returned; only structured outputs, evidence references, concise summaries, and safe errors are persisted.
 
 ## Tests and quality checks
 

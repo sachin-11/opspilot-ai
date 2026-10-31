@@ -14,6 +14,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
+from opspilot_api.auth.permissions import Permission
+from opspilot_api.auth.service import has_permission_sync
 from opspilot_api.config import Settings
 from opspilot_api.incidents.service import utcnow
 from opspilot_api.investigations.models import EvidenceItem, Investigation
@@ -1334,6 +1336,28 @@ class RemediationPipeline:
     ) -> None:
         """Every condition must hold now; any doubt stops publication (fail closed)."""
         full_name = scope.repository.full_name
+        # Re-authorize at execution time: the requester must still hold publish permission and the
+        # approver must still be an authorized, active reviewer (revocation voids the approval).
+        if not has_permission_sync(
+            session,
+            proposal.workspace_id,
+            proposal.publish_requested_by_user_id,
+            Permission.REMEDIATIONS_PUBLISH,
+        ):
+            self._publish_stop(session, proposal, "publisher_not_authorized")
+        approver_ok = False
+        try:
+            approver_ok = has_permission_sync(
+                session,
+                proposal.workspace_id,
+                UUID(str(approval.actor_id)),
+                Permission.REMEDIATIONS_REVIEW,
+            )
+        except ValueError:
+            approver_ok = False
+        if not approver_ok:
+            self.invalidate_approval(session, proposal, ["approver_not_authorized"])
+            raise ApprovalInvalidError(["approver_not_authorized"])
         if not write_enabled_for(self.settings, proposal.workspace_id, full_name):
             self._publish_stop(session, proposal, "write_not_enabled")
         if scope.repository.status != "active" or scope.repository.is_archived:

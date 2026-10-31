@@ -1,4 +1,4 @@
-# OpsPilot AI - Architecture (Modules 0-6)
+# OpsPilot AI - Architecture (Modules 0-7)
 
 ## Container view
 
@@ -642,4 +642,124 @@ The base is checked at generation (snapshot must equal the head), at sandbox pre
 ### Audit trail
 
 `remediation_audit_events` is append-only (trigger-enforced) and records actor type/id (null until Module 7), workspace, target, action, result, correlation ID, and scrubbed identifiers/counts for: request, patch generation/abstention, policy decision, sandbox start/stop (with cleanup verification), verification result, approval/rejection/revision request, approval invalidation, publication attempts, GitHub branch/commit/PR creation, failure, and cancellation. Real-time `remediation.*` events carry identifiers and statuses only.
+
+## Module 7 security architecture
+
+### Components
+
+`apps/web` is the only component the browser reaches for pages and API calls: its route handlers perform the OIDC flow, hold the sealed session cookie, and proxy API calls with the bearer token attached server-side. `services/api` verifies tokens, resolves membership, enforces permissions, rate limits, and writes the audit log. PostgreSQL stores users, memberships, invitations (hashed tokens), API keys (hashed), and the append-only audit table; Redis stores WebSocket tickets (hashed), local-IdP codes (dev), and rate-limit buckets. No new infrastructure is introduced.
+
+### Browser OIDC login
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Next.js (BFF)
+    participant IdP as OIDC provider (Cognito)
+    participant A as API
+    B->>W: GET /api/auth/login?returnTo=/incidents
+    W->>W: PKCE verifier+challenge, state, nonce; sealed HttpOnly tx cookie
+    W-->>B: 302 to IdP authorize (S256, state, nonce)
+    B->>IdP: authenticate (password/MFA at the IdP)
+    IdP-->>B: 302 /api/auth/callback?code&state
+    B->>W: callback (+ tx cookie)
+    W->>W: state matches tx?
+    W->>IdP: token request (code + code_verifier)
+    IdP-->>W: access_token, id_token
+    W->>W: verify id_token (iss, aud, signature, nonce)
+    W-->>B: 302 returnTo + sealed HttpOnly session cookie (token inside, encrypted)
+    B->>W: /api/proxy/... (cookie + CSRF header on mutations)
+    W->>A: Authorization: Bearer (attached server-side)
+```
+
+### OIDC token validation
+
+The API accepts exactly one credential per request. `OidcProvider` reads the unverified header only to select `kid` and check `alg` against the allowlist, fetches the key from a bounded JWKS cache (URL derived from the configured issuer; one rate-bounded refresh per unknown `kid`), verifies the signature with the allowlisted algorithm, requires `exp`/`sub`/`iss` (and enforces `nbf` when present), checks issuer, audience (`aud` or Cognito `client_id`), and `token_use`, then maps the immutable `sub` to a local `users` row (`UNIQUE(provider, sub)`); email is informational. Failures map to 401 with a generic message and never include the token; a JWKS outage is a configuration error (503), never a pass. `LocalProvider` verifies HS256 tokens for development and refuses to construct outside development/test.
+
+### Membership resolution and authorization decision flow
+
+```mermaid
+flowchart TB
+    R[HTTP request] --> C{Route classified?}
+    C -- no --> F403[403 deny: fail closed]
+    C -- public --> RL0[rate limit webhook] --> H[handler]
+    C -- yes --> AU{Exactly one credential?}
+    AU -- none/both/query string --> F401[401]
+    AU -- bearer --> V[verify token via IdentityProvider] --> U[upsert user by sub; disabled => 401]
+    AU -- X-API-Key --> K[lookup prefix, constant-time hash compare; revoked/expired => 401]
+    U --> M{Active membership in path workspace?}
+    M -- no --> F404[404 same as nonexistent]
+    M -- yes --> P{Role grants route permission?}
+    P -- no --> D[audit denied] --> F403b[403]
+    P -- yes --> RL[rate limit by identity] --> AUD{Sensitive route?}
+    K --> W{Key workspace == path workspace and scope admits route?}
+    W -- workspace differs --> F404
+    W -- scope missing --> D
+    W -- ok --> RL
+    AUD -- yes --> PRE[pre-write audit; fail closed 503] --> H
+    AUD -- no --> H
+    H --> S[domain service rechecks Actor.require permission]
+```
+
+The global FastAPI dependency (`auth/dependencies.py`) builds an immutable `Actor` (principal, workspace, role, permissions) and handlers receive only that. Services call `actor.require(...)`, which a system principal or API key can never satisfy for human permissions, so a service invoked without the route guard still denies. Background jobs carry user IDs and re-authorize at execution time (publication).
+
+### API-key authentication
+
+Keys are `ospk_<8-hex prefix>_<256-bit secret>`. Authentication looks up by prefix, compares SHA-256 hashes in constant time (a dummy hash is compared when the prefix is unknown), rejects revoked/expired keys, resolves the workspace from the key record, and applies the route's single admitting scope. `last_used_at` is written at most once per throttle window. Keys have their own rate-limit rule.
+
+### WebSocket ticket lifecycle
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant W as Next.js proxy
+    participant A as API
+    participant R as Redis
+    B->>W: POST /api/proxy/api/v1/auth/ws-ticket {workspace_id}
+    W->>A: bearer + CSRF checked at the proxy
+    A->>A: membership + workspace.read; rate limit
+    A->>R: SET sha256(ticket) {user, workspace, membership, channel} EX 30
+    A-->>B: ticket (plaintext, once)
+    B->>A: WS /api/v1/ws/workspaces/{id}/incidents?ticket=...
+    A->>R: GETDEL sha256(ticket) (atomic single use)
+    A->>A: workspace + channel match? connection limit? membership active?
+    A-->>B: accept; subscribe only to this workspace channel
+    loop every few seconds
+        A->>A: membership still active? else close 4403
+    end
+    Note over B,A: reconnect = new ticket; reused/expired/forged = close 4401
+```
+
+### Remediation approval and publication authorization
+
+```mermaid
+sequenceDiagram
+    participant U1 as Reviewer (human)
+    participant U2 as Publisher (human)
+    participant A as API
+    participant DB as PostgreSQL
+    participant Wk as Sandbox worker
+    U1->>A: review approve (Module 6 artifact binding)
+    A->>A: remediations.review? not an API key/system? high risk => not requester or last reviser
+    A->>DB: approval.actor_id = verified user id (client actor ignored); audit
+    U2->>A: publish
+    A->>A: remediations.publish? approver still active + remediations.review? binding exact?
+    alt approver revoked or binding changed
+        A->>DB: approval_invalidated; back to policy_check
+    else ok
+        A->>DB: publishing (publish_requested_by_user_id); pre-write audit (fail closed)
+        A->>Wk: enqueue publish job
+        Wk->>DB: re-authorize at execution: publisher holds publish; approver still reviewer
+        Wk->>Wk: base unchanged, policy unchanged, hashes equal
+        Wk->>DB: branch, commit, PR (idempotent)
+    end
+```
+
+### Audit-event flow
+
+Security-relevant actions create an `audit_events` row containing actor type/IDs, action, resource, request and correlation IDs, hashed IP, truncated user agent, result, reason code, and bounded scrubbed metadata. The row is signed with an HMAC (`AUTH_AUDIT_KEY`) over its canonical JSON. Membership/key/invitation audit is staged in the same transaction as the change (a failure rolls both back); sensitive routes write a pre-execution event in an independent transaction and refuse to proceed if it fails; denials are recorded best-effort. A trigger blocks `UPDATE`/`DELETE`; `audit_verify` recomputes every HMAC and reports mismatches.
+
+### Rate limiting
+
+A Lua token bucket per `(rule, identity)` runs atomically in Redis. Identity is the user ID, API-key ID, webhook source public ID, or HMAC'd IP; keys hash the identity, carry a TTL of the refill window plus a minute, and therefore cannot grow unboundedly. Denial returns 429 with `Retry-After`. High-risk rules (approvals, remediation/investigation starts, invitations) fail closed on Redis errors; read-like rules fail open.
 

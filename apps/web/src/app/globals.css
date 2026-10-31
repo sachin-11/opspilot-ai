@@ -209,3 +209,12 @@ dl { display: grid; grid-template-columns: 120px 1fr; gap: 10px; } dt { color: v
   .diff-scroll { display: none; } .diff-mobile { display: block; }
   .binding-list { grid-template-columns: 1fr; }
 }
+
+/* Module 7: authentication and access control */
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.auth-card { max-width: 460px; width: 100%; display: grid; gap: 14px; }
+.workspace-select { display: grid; gap: 4px; margin-top: 8px; font-size: .8rem; color: var(--color-muted); }
+.current-user { margin: 6px 0 0; font-size: .8rem; overflow-wrap: anywhere; }
+.link-button { background: none; border: 0; padding: 0; color: var(--color-accent); text-decoration: underline; cursor: pointer; }
+fieldset { border: 1px solid var(--color-line); padding: 10px 14px; display: grid; gap: 6px; }
+@media (max-width: 640px) { .table-wrap td, .table-wrap th { white-space: normal; padding: 10px 8px; } .auth-card { padding: 16px; } }

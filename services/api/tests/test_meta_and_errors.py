@@ -1,3 +1,4 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -32,7 +33,29 @@ def test_invalid_incoming_request_id_is_replaced(client: TestClient) -> None:
     assert len(response.headers["X-Request-ID"]) == 32
 
 
-def test_unhandled_exception_is_masked(app: FastAPI, client: TestClient) -> None:
+def test_unclassified_routes_are_denied(app: FastAPI, client: TestClient) -> None:
+    @app.get("/not-classified")
+    async def not_classified() -> dict[str, str]:
+        return {"ok": "should never be reachable"}
+
+    response = client.get("/not-classified")
+    assert response.status_code == 403
+    assert "should never" not in response.text
+
+
+def test_unhandled_exception_is_masked(
+    app: FastAPI, client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from opspilot_api.auth.route_policy import RoutePolicy, classify
+
+    real = classify
+    monkeypatch.setattr(
+        "opspilot_api.auth.dependencies.classify",
+        lambda method, template: (
+            RoutePolicy(public=True) if template == "/boom" else real(method, template)
+        ),
+    )
+
     @app.get("/boom")
     async def boom() -> None:
         raise RuntimeError("secret internal detail")

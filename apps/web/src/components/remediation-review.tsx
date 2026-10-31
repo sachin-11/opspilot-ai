@@ -4,10 +4,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
 import { api, type ApprovalAction, type RemediationDetail, type RemediationVerification } from "@/lib/api";
 import { describeError, NO_AUTO_MERGE, shortHash } from "./remediation-common";
+import { can } from "@/lib/permissions";
 import { useOps } from "./providers";
 
 export function ReviewPanel({remediation, verification}: {remediation: RemediationDetail; verification: RemediationVerification | undefined}) {
-  const {baseUrl, workspace} = useOps();
+  const ops = useOps();
+  const {baseUrl, workspace} = ops;
+  const mayReview = can(ops, "remediations.review");
   const client = useQueryClient();
   const [confirmed, setConfirmed] = useState(false);
   const [comment, setComment] = useState("");
@@ -58,9 +61,10 @@ export function ReviewPanel({remediation, verification}: {remediation: Remediati
     <form className="review-form" onSubmit={submit}>
       <label className="check-row"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> I reviewed this exact patch (hash <code>{shortHash(binding.patch_hash)}</code>), its policy result, and its verification evidence.</label>
       <label>Comment (required)<textarea value={comment} onChange={(event) => setComment(event.target.value)} rows={3} maxLength={2000}/></label>
+      {!mayReview && <p role="note" className="notice">Your role cannot review remediations. Ask a responder, admin, or owner.</p>}
       {error && <p role="alert" className="error">{error}</p>}
       <div className="review-actions">
-        <button className="button primary" name="action" value="approved" disabled={mutation.isPending || !confirmed}>Approve and create pull request</button>
+        <button className="button primary" name="action" value="approved" disabled={mutation.isPending || !confirmed || !mayReview}>Approve and create pull request</button>
         <button className="button" name="action" value="revision_requested" disabled={mutation.isPending}>Request revision</button>
         <button className="button danger" name="action" value="rejected" disabled={mutation.isPending}>Reject</button>
       </div>

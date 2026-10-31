@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Annotated
@@ -20,6 +21,14 @@ from fastapi import (
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.context import RateLimitedError
+from opspilot_api.auth.dependencies import CurrentPrincipal, RequestMeta
+from opspilot_api.auth.service import (
+    active_membership,
+    create_workspace_with_owner,
+    list_user_workspaces,
+)
+from opspilot_api.auth.tickets import consume_ticket
 from opspilot_api.incidents.models import Environment, IncidentStatus, Severity
 from opspilot_api.incidents.schemas import (
     EventIngestRequest,
@@ -38,17 +47,14 @@ from opspilot_api.incidents.schemas import (
     WorkspaceResponse,
 )
 from opspilot_api.incidents.service import (
-    NotFoundError,
     add_note,
     create_manual_incident,
     create_service,
-    create_workspace,
     get_incident_response,
     ingest_event,
     list_incidents,
     list_services,
     list_timeline,
-    list_workspaces,
     publish_notification,
     require_service,
     require_workspace,
@@ -59,6 +65,8 @@ from opspilot_api.incidents.service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
+MEMBERSHIP_RECHECK_SECONDS = 5.0
+MAX_MESSAGES_PER_WINDOW = 30
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
@@ -82,13 +90,28 @@ async def notify(request: Request, workspace_id: UUID, incident_id: UUID, event_
     status_code=status.HTTP_201_CREATED,
     tags=["workspaces"],
 )
-async def post_workspace(data: WorkspaceCreate, session: Session) -> WorkspaceResponse:
-    return WorkspaceResponse.model_validate(await create_workspace(session, data))
+async def post_workspace(
+    request: Request,
+    data: WorkspaceCreate,
+    session: Session,
+    principal: CurrentPrincipal,
+    meta: RequestMeta,
+) -> WorkspaceResponse:
+    # The creator becomes the first owner; nobody else gains access.
+    workspace = await create_workspace_with_owner(
+        session, request.app.state.settings, principal, data.name, data.slug, meta
+    )
+    return WorkspaceResponse.model_validate(workspace)
 
 
 @router.get("/workspaces", response_model=list[WorkspaceResponse], tags=["workspaces"])
-async def get_workspaces(session: Session) -> list[WorkspaceResponse]:
-    return [WorkspaceResponse.model_validate(item) for item in await list_workspaces(session)]
+async def get_workspaces(session: Session, principal: CurrentPrincipal) -> list[WorkspaceResponse]:
+    if principal.user_id is None:
+        return []
+    return [
+        WorkspaceResponse.model_validate(workspace)
+        for workspace, _membership in await list_user_workspaces(session, principal.user_id)
+    ]
 
 
 @router.get("/workspaces/{workspace_id}", response_model=WorkspaceResponse, tags=["workspaces"])
@@ -253,17 +276,47 @@ async def post_event(
 
 
 @router.websocket("/ws/workspaces/{workspace_id}/incidents")
-async def incident_socket(websocket: WebSocket, workspace_id: UUID) -> None:
-    async with websocket.app.state.session_factory() as session:
-        try:
-            await require_workspace(session, workspace_id)
-        except NotFoundError:
-            await websocket.close(code=4404)
+async def incident_socket(websocket: WebSocket, workspace_id: UUID, ticket: str = "") -> None:
+    """Realtime feed, authenticated only by a short-lived single-use ticket."""
+    app = websocket.app
+    settings = app.state.settings
+    redis = app.state.redis
+    claims = await consume_ticket(redis, ticket, workspace_id, "incidents")
+    if claims is None:
+        await websocket.close(code=4401)
+        return
+    user_id = UUID(claims["user_id"])
+    limiter = getattr(app.state, "rate_limiter", None)
+    try:
+        if limiter is not None:
+            await limiter.check("ws_connect", f"user:{user_id}")
+        slots = await redis.incr(f"opspilot:wsc:{user_id}")
+        await redis.expire(f"opspilot:wsc:{user_id}", 3600)
+    except (RateLimitedError, RedisError):
+        await websocket.close(code=4429)
+        return
+    try:
+        if slots > settings.AUTH_WS_MAX_CONNECTIONS_PER_USER:
+            await websocket.close(code=4429)
             return
-    await websocket.accept()
+        async with app.state.session_factory() as session:
+            if await active_membership(session, user_id, workspace_id) is None:
+                await websocket.close(code=4403)
+                return
+        await websocket.accept()
+        await serve_socket(websocket, workspace_id, user_id)
+    finally:
+        with suppress(RedisError):
+            await redis.decr(f"opspilot:wsc:{user_id}")
+
+
+async def serve_socket(websocket: WebSocket, workspace_id: UUID, user_id: UUID) -> None:
     redis = websocket.app.state.redis
     pubsub = redis.pubsub()
     channel = f"opspilot:workspace:{workspace_id}:incidents"
+    last_check = time.monotonic()
+    window_start = time.monotonic()
+    received = 0
     try:
         await pubsub.subscribe(channel)
         connected = RealtimeEnvelope(
@@ -279,9 +332,23 @@ async def incident_socket(websocket: WebSocket, workspace_id: UUID) -> None:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message and isinstance(message.get("data"), bytes):
                 envelope = RealtimeEnvelope.model_validate_json(message["data"])
+                if envelope.workspace_id != workspace_id:
+                    continue  # never forward another tenant's event
                 await websocket.send_text(envelope.model_dump_json())
+            if time.monotonic() - last_check > MEMBERSHIP_RECHECK_SECONDS:
+                last_check = time.monotonic()
+                async with websocket.app.state.session_factory() as session:
+                    if await active_membership(session, user_id, workspace_id) is None:
+                        await websocket.close(code=4403)  # revoked: stop streaming immediately
+                        return
             try:
                 incoming = await asyncio.wait_for(websocket.receive_text(), timeout=0.05)
+                received += 1
+                if time.monotonic() - window_start > 10:
+                    window_start, received = time.monotonic(), 1
+                if received > MAX_MESSAGES_PER_WINDOW:
+                    await websocket.close(code=4429)
+                    return
                 if incoming == "ping":
                     await websocket.send_text("pong")
             except TimeoutError:

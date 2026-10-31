@@ -58,7 +58,31 @@ def new_workspace(session: Session, label: str = "repo") -> Workspace:
     workspace = Workspace(name=f"{label} {suffix}", slug=f"{label}-{suffix}")
     session.add(workspace)
     session.flush()
+    grant_test_owner(session, workspace)
     return workspace
+
+
+def grant_test_owner(session: Session, workspace: Workspace, role: str = "owner") -> None:
+    """Give the deterministic test user (the TestClient default identity) a membership."""
+    from opspilot_api.auth.models import User, WorkspaceMembership
+
+    user = session.scalar(
+        select(User).where(User.identity_provider == "local", User.external_subject == "test-owner")
+    )
+    if user is None:
+        user = User(
+            identity_provider="local",
+            external_subject="test-owner",
+            email="test-owner@test.local",
+            display_name="test-owner",
+            status="active",
+        )
+        session.add(user)
+        session.flush()
+    session.add(
+        WorkspaceMembership(workspace_id=workspace.id, user_id=user.id, role=role, status="active")
+    )
+    session.flush()
 
 
 def new_service(

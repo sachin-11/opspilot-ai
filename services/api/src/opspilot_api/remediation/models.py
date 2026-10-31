@@ -198,6 +198,10 @@ class RemediationProposal(TimestampMixin, Base):
     total_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     estimated_cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
     stale_reason: Mapped[str | None] = mapped_column(String(200))
+    # Verified identities (Module 7); used for separation-of-duties and publication rechecks.
+    requested_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    last_revised_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    publish_requested_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_code: Mapped[str | None] = mapped_column(String(80))

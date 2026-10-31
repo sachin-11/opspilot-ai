@@ -161,15 +161,19 @@ class Env:
         version: int | None = None,
         revision_id: UUID | str | None = None,
         expect: int = 202,
+        headers: dict[str, str] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         detail = self.detail(remediation_id)
         response = self.client.post(
             f"{self.base}/remediations/{remediation_id}/review",
+            headers=headers,
             json={
                 "action": action,
                 "comment": comment,
                 "revision_id": str(revision_id or detail["current_revision_id"]),
                 "version": version or detail["version"],
+                **(extra or {}),
             },
         )
         assert response.status_code == expect, response.text
@@ -183,8 +187,12 @@ class Env:
             self.settings, args[0], args[1], args[2], args[3], pipeline=self.pipeline
         )
 
-    def publish_api(self, remediation_id: UUID, expect: int = 202) -> dict[str, Any]:
-        response = self.client.post(f"{self.base}/remediations/{remediation_id}/publish")
+    def publish_api(
+        self, remediation_id: UUID, expect: int = 202, headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        response = self.client.post(
+            f"{self.base}/remediations/{remediation_id}/publish", headers=headers
+        )
         assert response.status_code == expect, response.text
         data: dict[str, Any] = response.json()
         return data
@@ -1405,3 +1413,185 @@ def test_worker_serves_remediation_queue_only_when_configured(
     assert queue_names() == ["remediation"]
     monkeypatch.setenv("WORKER_QUEUES", " ")
     assert queue_names() == ["default"]
+
+
+# ---- identity-backed approvals and separation of duties (Module 7) ---------------------------
+def add_actor(env: Env, role: str) -> tuple[Any, dict[str, str]]:
+    """A real user holding ``role`` in the scenario workspace plus their signed local token."""
+    from opspilot_api.auth.models import User, WorkspaceMembership
+
+    from .conftest import auth_headers
+
+    subject = f"actor-{role}-{uuid4().hex[:8]}"
+    user = User(
+        identity_provider="local",
+        external_subject=subject,
+        email=f"{subject}@example.test",
+        display_name=subject,
+        status="active",
+    )
+    env.session.add(user)
+    env.session.flush()
+    env.session.add(
+        WorkspaceMembership(
+            workspace_id=env.scenario.workspace.id, user_id=user.id, role=role, status="active"
+        )
+    )
+    env.session.commit()
+    return user, auth_headers(subject, f"{subject}@example.test")
+
+
+def set_risk(env: Env, remediation_id: UUID, risk: str) -> None:
+    env.session.execute(
+        update(RemediationProposal)
+        .where(RemediationProposal.id == remediation_id)
+        .values(risk_level=risk)
+    )
+    env.session.commit()
+
+
+def test_approval_is_bound_to_the_verified_user_and_actor_cannot_be_forged(
+    make_env: EnvFactory, session: Session
+) -> None:
+    env = make_env()
+    remediation_id = env.to_awaiting()
+    user, headers = add_actor(env, "responder")
+    env.review(
+        remediation_id, headers=headers, extra={"actor_id": "forged-admin", "actor": {"id": "x"}}
+    )
+    approval = session.scalars(
+        select(RemediationApproval).where(RemediationApproval.remediation_id == remediation_id)
+    ).one()
+    assert approval.actor_id == str(user.id)
+    assert env.detail(remediation_id)["approvals"][0]["actor_id"] == str(user.id)
+    assert "review_approved" in env.audit_actions(remediation_id)
+
+
+def test_high_risk_remediation_cannot_be_approved_by_its_requester(make_env: EnvFactory) -> None:
+    env = make_env()
+    remediation_id = env.to_awaiting()  # requested by the default test owner
+    set_risk(env, remediation_id, "high")
+    denied = env.review(remediation_id, expect=403)
+    assert "separation of duties" in denied["error"]["message"]
+    assert env.row(remediation_id).status == "awaiting_approval"
+    _user, other = add_actor(env, "responder")
+    env.review(remediation_id, headers=other)
+    assert env.row(remediation_id).status == "approved"
+
+
+def test_last_reviser_of_a_high_risk_remediation_cannot_be_its_sole_approver(
+    make_env: EnvFactory,
+) -> None:
+    env = make_env()
+    remediation_id = env.to_awaiting()
+    _reviser, reviser_headers = add_actor(env, "responder")
+    env.review(remediation_id, "revision_requested", "tighten it", headers=reviser_headers)
+    env.resume_last(remediation_id)
+    assert env.row(remediation_id).status == "awaiting_approval"
+    set_risk(env, remediation_id, "high")
+    assert env.row(remediation_id).last_revised_by_user_id is not None
+    env.review(remediation_id, headers=reviser_headers, expect=403)
+    _third, third_headers = add_actor(env, "admin")
+    env.review(remediation_id, headers=third_headers)
+    assert env.row(remediation_id).status == "approved"
+
+
+def test_api_keys_viewers_and_unprivileged_roles_cannot_review_or_publish(
+    make_env: EnvFactory,
+) -> None:
+    from opspilot_api.main import create_app
+
+    from .conftest import anonymous_client
+
+    env = make_env()
+    remediation_id = env.to_awaiting()
+    created = env.client.post(
+        f"{env.base}/api-keys",
+        json={
+            "name": "bot",
+            "scopes": ["events:write", "incidents:read", "investigations:read", "knowledge:read"],
+        },
+    )
+    assert created.status_code == 201
+    with anonymous_client(create_app(env.settings), raise_server_exceptions=False) as bare:
+        for action in ("review", "publish"):
+            response = bare.post(
+                f"{env.base}/remediations/{remediation_id}/{action}",
+                headers={"X-API-Key": created.json()["key"]},
+                json={
+                    "action": "approved",
+                    "comment": "x",
+                    "revision_id": str(uuid4()),
+                    "version": 1,
+                },
+            )
+            assert response.status_code == 403, action
+    assert env.row(remediation_id).status == "awaiting_approval"
+    _viewer, viewer_headers = add_actor(env, "viewer")
+    env.review(remediation_id, headers=viewer_headers, expect=403)
+    _analyst, analyst_headers = add_actor(env, "analyst")
+    env.review(remediation_id, headers=analyst_headers, expect=403)
+    _responder, responder_headers = add_actor(env, "responder")
+    env.review(remediation_id, headers=responder_headers)
+    env.publish_api(remediation_id, expect=403, headers=responder_headers)  # review is not publish
+    assert env.row(remediation_id).status == "approved"
+
+
+def test_revoked_approver_invalidates_the_approval_before_publication(
+    make_env: EnvFactory, session: Session
+) -> None:
+    from opspilot_api.auth.models import WorkspaceMembership
+
+    env = make_env()
+    remediation_id = env.to_awaiting()
+    approver, approver_headers = add_actor(env, "responder")
+    env.review(remediation_id, headers=approver_headers)
+    session.execute(
+        update(WorkspaceMembership)
+        .where(WorkspaceMembership.user_id == approver.id)
+        .values(role="viewer")
+    )
+    session.commit()
+    response = env.client.post(f"{env.base}/remediations/{remediation_id}/publish")
+    assert response.status_code == 409
+    assert env.row(remediation_id).status == "policy_check"
+    assert "approval_invalidated" in env.audit_actions(remediation_id)
+    assert env.writer.pulls == {} and env.writer.branches == {}
+
+
+def test_permission_loss_between_request_and_execution_stops_publication(
+    make_env: EnvFactory, session: Session
+) -> None:
+    from opspilot_api.auth.models import User, WorkspaceMembership
+
+    env = make_env()
+    remediation_id = env.to_approved()
+    env.publish_api(remediation_id)
+    owner = session.scalar(select(User).where(User.external_subject == "test-owner"))
+    assert owner is not None
+    session.execute(
+        update(WorkspaceMembership)
+        .where(
+            WorkspaceMembership.user_id == owner.id,
+            WorkspaceMembership.workspace_id == env.scenario.workspace.id,
+        )
+        .values(status="revoked")
+    )
+    session.commit()
+    outcome = env.publish_job(remediation_id)
+    assert outcome["outcome"] in {"failed", "approval_invalid"}
+    assert env.row(remediation_id).status in {"failed", "policy_check"}
+    assert env.writer.pulls == {} and env.writer.branches == {}
+
+
+def test_stale_approval_remains_invalid_even_for_privileged_publishers(
+    make_env: EnvFactory,
+) -> None:
+    env = make_env()
+    remediation_id = env.to_approved()
+    env.publish_api(remediation_id)
+    advance_head(env.scenario.provider)
+    assert env.publish_job(remediation_id)["outcome"] == "approval_invalid"
+    assert env.row(remediation_id).status == "stale"
+    env.publish_api(remediation_id, expect=409)
+    assert env.writer.pulls == {}

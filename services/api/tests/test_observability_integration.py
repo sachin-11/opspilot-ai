@@ -19,6 +19,7 @@ from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from opspilot_api.auth.providers import LocalProvider
 from opspilot_api.config import Environment, Settings
 from opspilot_api.incidents.models import Incident, IncidentEvent, IngestedEvent
 from opspilot_api.incidents.service import ingest_event
@@ -857,7 +858,16 @@ def test_signal_explorer_pipeline_status_and_demo_generation(api: Api, session: 
     assert pipeline["dead_letters_open"] >= 1 and {s["name"] for s in pipeline["sources"]} >= {
         "demo"
     }
-    production = create_app(obs_settings(APP_ENV=Environment.PRODUCTION))
+    production = create_app(
+        obs_settings(
+            APP_ENV=Environment.PRODUCTION,
+            AUTH_PROVIDER="oidc",
+            AUTH_OIDC_ISSUER="https://idp.test.example",
+            AUTH_OIDC_AUDIENCE="client",
+        )
+    )
+    # Authenticate with the deterministic test identity while the app runs in production mode.
+    production.state.identity_provider = LocalProvider(obs_settings())
     with TestClient(production) as prod:
         denied = prod.post(f"{base}/demo/generate", json={"source_id": demo["id"], "count": 1})
         assert denied.status_code == 404 and denied.json()["error"]["code"] == "demo_disabled"
