@@ -522,6 +522,27 @@ sum(rate(opspilot_http_requests_total{status=~"5.."}[5m])) / sum(rate(opspilot_h
 histogram_quantile(0.95, sum by (le, route) (rate(opspilot_http_request_duration_seconds_bucket[5m])))
 ```
 
+## Demo data
+
+An empty console is hard to evaluate, so `python -m opspilot_api.maintenance.demo_data` fills an **existing** workspace (the one you are signed in to) with realistic scenarios. It goes through the same services as the API, so the data is consistent, and it is idempotent (scenarios are matched by title and skipped when present). It refuses to run in production and always needs an explicit workspace.
+
+```powershell
+docker compose exec api python -m opspilot_api.maintenance.demo_data --list
+docker compose exec api python -m opspilot_api.maintenance.demo_data --workspace <slug-or-uuid>
+```
+
+| Scenario | What it shows |
+| --- | --- |
+| Checkout 5xx spike after a release (SEV1, mitigated) | Six correlated alerts, a redelivered alert recognised as a duplicate, notes, and an AI investigation left **awaiting review** |
+| Payments database pool exhausted (SEV2, resolved) | Full lifecycle; the investigation was **approved** |
+| Notification queue lag (SEV2, investigating) | A 12-alert storm collapsed into one incident; the investigation was **rejected** with a reviewer comment |
+| Search latency (SEV3, open) | A single alert, freshly opened |
+| Staging login errors (SEV3, resolved) | A manually declared incident with a timeline |
+| Nightly inventory sync (SEV4, reopened) | Resolved, then reopened |
+| Pipeline signals | Alert, log, metric and a duplicate delivery through the signed webhook and Kafka, plus a poison payload that lands in the **dead-letter queue** |
+
+Investigations are produced by the real worker with the configured provider (the deterministic `fake` one by default), so the worker must be running; signals need the API, Kafka and the consumers. Use `--no-investigations` or `--no-signals` to skip either part, and `--wait` to change how long it waits for each investigation. Timelines are spread over the scenarios' ages so the history looks believable. To remove the data, delete the workspace or seed into a fresh one.
+
 ## Dependency-failure drill
 
 `python -m opspilot_api.maintenance.chaos` stops PostgreSQL and Redis in a throwaway Compose project and checks the documented degradation (readiness 503 while liveness stays 200, a database outage answered as a retryable 503, reads continuing and high-risk mutations refused when Redis is down) and automatic recovery. See [docs/chaos-testing.md](docs/chaos-testing.md).
