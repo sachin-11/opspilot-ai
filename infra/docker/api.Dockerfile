@@ -1,5 +1,5 @@
 # Used for both the API and the RQ worker (different command in compose.yaml).
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
@@ -10,7 +10,7 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 RUN uv sync --frozen --no-dev
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 # Pick up distribution security fixes that are newer than the base image snapshot.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
