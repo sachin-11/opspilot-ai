@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" width="1600" height="1000" font-family="Segoe UI, system-ui, -apple-system, Roboto, Arial, sans-serif">
+<defs>
+<marker id="a-9aa8ae" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#9aa8ae"/></marker>
+<marker id="s-9aa8ae" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M10 0L0 5L10 10z" fill="#9aa8ae"/></marker>
+<marker id="a-f2b441" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f2b441"/></marker>
+<marker id="s-f2b441" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M10 0L0 5L10 10z" fill="#f2b441"/></marker>
+<marker id="a-5fd08a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5fd08a"/></marker>
+<marker id="s-5fd08a" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M10 0L0 5L10 10z" fill="#5fd08a"/></marker>
+<marker id="a-6ea8fe" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6ea8fe"/></marker>
+<marker id="s-6ea8fe" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M10 0L0 5L10 10z" fill="#6ea8fe"/></marker>
+<marker id="a-5bc8d8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5bc8d8"/></marker>
+<marker id="s-5bc8d8" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M10 0L0 5L10 10z" fill="#5bc8d8"/></marker>
+<marker id="a-ff8a7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ff8a7a"/></marker>
+<marker id="s-ff8a7a" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M10 0L0 5L10 10z" fill="#ff8a7a"/></marker>
+</defs>
+<rect width="1600" height="1000" fill="#0f1315"/>
+<text x="40" y="76" fill="#f2b441" font-size="13" font-weight="700" letter-spacing="3">INCIDENT RESPONSE PLATFORM</text>
+<text x="40" y="118" fill="#e8eef0" font-size="40" font-weight="800">OpsPilot AI</text>
+<text x="40" y="146" fill="#9aa8ae" font-size="15">AI investigates. Humans approve.</text>
+<rect x="40" y="210" width="200" height="90" rx="10" fill="#161c1f" stroke="#5bc8d8" stroke-width="1.6"/>
+<rect x="40" y="210" width="6" height="90" rx="3" fill="#5bc8d8"/>
+<text x="60" y="238" fill="#e8eef0" font-size="17" font-weight="700">Operator</text>
+<text x="60" y="260" fill="#9aa8ae" font-size="13.5">Browser · any role:</text>
+<text x="60" y="279" fill="#9aa8ae" font-size="13.5">viewer, responder, owner</text>
+<rect x="40" y="410" width="200" height="100" rx="10" fill="#161c1f" stroke="#6ea8fe" stroke-width="1.6"/>
+<rect x="40" y="410" width="6" height="100" rx="3" fill="#6ea8fe"/>
+<text x="60" y="438" fill="#e8eef0" font-size="17" font-weight="700">Monitoring tools</text>
+<text x="60" y="460" fill="#9aa8ae" font-size="13.5">Datadog · Prometheus</text>
+<text x="60" y="479" fill="#9aa8ae" font-size="13.5">CloudWatch · custom</text>
+<rect x="340" y="50" width="260" height="80" rx="10" fill="#161c1f" stroke="#6ea8fe" stroke-width="1.6"/>
+<rect x="340" y="50" width="6" height="80" rx="3" fill="#6ea8fe"/>
+<text x="360" y="78" fill="#e8eef0" font-size="17" font-weight="700">Keycloak / Cognito</text>
+<text x="360" y="100" fill="#9aa8ae" font-size="13.5">OIDC identity provider</text>
+<rect x="340" y="190" width="260" height="110" rx="10" fill="#161c1f" stroke="#5bc8d8" stroke-width="1.6"/>
+<rect x="340" y="190" width="6" height="110" rx="3" fill="#5bc8d8"/>
+<text x="360" y="218" fill="#e8eef0" font-size="17" font-weight="700">Next.js console</text>
+<text x="360" y="240" fill="#9aa8ae" font-size="13.5">Sealed session cookie · CSRF</text>
+<text x="360" y="259" fill="#9aa8ae" font-size="13.5">Same-origin API proxy</text>
+<rect x="340" y="380" width="260" height="140" rx="10" fill="#161c1f" stroke="#5bc8d8" stroke-width="1.6"/>
+<rect x="340" y="380" width="6" height="140" rx="3" fill="#5bc8d8"/>
+<text x="360" y="408" fill="#e8eef0" font-size="17" font-weight="700">FastAPI API</text>
+<text x="360" y="430" fill="#9aa8ae" font-size="13.5">OIDC verify · role checks</text>
+<text x="360" y="449" fill="#9aa8ae" font-size="13.5">Rate limits · audit log</text>
+<text x="360" y="468" fill="#9aa8ae" font-size="13.5">REST + WebSocket</text>
+<text x="360" y="487" fill="#9aa8ae" font-size="13.5">Signed-webhook ingress</text>
+<rect x="700" y="380" width="300" height="170" rx="10" fill="#161c1f" stroke="#f2b441" stroke-width="1.6"/>
+<rect x="700" y="380" width="6" height="170" rx="3" fill="#f2b441"/>
+<text x="720" y="408" fill="#e8eef0" font-size="17" font-weight="700">Worker + LangGraph</text>
+<text x="720" y="430" fill="#9aa8ae" font-size="13.5">Collect evidence, then analyse</text>
+<text x="720" y="449" fill="#9aa8ae" font-size="13.5">Cited report, durable checkpoints</text>
+<rect x="720" y="470" width="260" height="62" rx="8" fill="#2a2210" stroke="#f2b441" stroke-width="1.4"/>
+<text x="734" y="494" fill="#f2b441" font-size="14" font-weight="700">Human review gate</text>
+<text x="734" y="514" fill="#e8eef0" font-size="13">approve · request revision · reject</text>
+<rect x="1100" y="50" width="460" height="80" rx="10" fill="#161c1f" stroke="#6ea8fe" stroke-width="1.6"/>
+<rect x="1100" y="50" width="6" height="80" rx="3" fill="#6ea8fe"/>
+<text x="1120" y="78" fill="#e8eef0" font-size="17" font-weight="700">LLM provider</text>
+<text x="1120" y="100" fill="#9aa8ae" font-size="13.5">Versioned prompts · budgets · circuit breakers</text>
+<rect x="1100" y="175" width="460" height="100" rx="10" fill="#161c1f" stroke="#6ea8fe" stroke-width="1.6"/>
+<rect x="1100" y="175" width="6" height="100" rx="3" fill="#6ea8fe"/>
+<text x="1120" y="203" fill="#e8eef0" font-size="17" font-weight="700">GitHub</text>
+<text x="1120" y="225" fill="#9aa8ae" font-size="13.5">Read-only code and commit history</text>
+<text x="1120" y="244" fill="#9aa8ae" font-size="13.5">Fix PR only after approval. Never merges.</text>
+<rect x="1100" y="320" width="460" height="80" rx="10" fill="#161c1f" stroke="#6ea8fe" stroke-width="1.6"/>
+<rect x="1100" y="320" width="6" height="80" rx="3" fill="#6ea8fe"/>
+<text x="1120" y="348" fill="#e8eef0" font-size="17" font-weight="700">Docker sandbox</text>
+<text x="1120" y="370" fill="#9aa8ae" font-size="13.5">Verifies a proposed patch in isolation</text>
+<rect x="340" y="600" width="660" height="150" rx="14" fill="none" stroke="#5fd08a" stroke-width="1.4" stroke-dasharray="6 6"/>
+<text x="356" y="622" fill="#5fd08a" font-size="12.5" font-weight="700" letter-spacing="1.6">STATE</text>
+<rect x="360" y="640" width="300" height="90" rx="10" fill="#161c1f" stroke="#5fd08a" stroke-width="1.6"/>
+<rect x="360" y="640" width="6" height="90" rx="3" fill="#5fd08a"/>
+<text x="380" y="668" fill="#e8eef0" font-size="16" font-weight="700">PostgreSQL + pgvector</text>
+<text x="380" y="690" fill="#9aa8ae" font-size="13.5">Incidents · investigations · audit</text>
+<text x="380" y="709" fill="#9aa8ae" font-size="13.5">Runbook and code index</text>
+<rect x="680" y="640" width="300" height="90" rx="10" fill="#161c1f" stroke="#5fd08a" stroke-width="1.6"/>
+<rect x="680" y="640" width="6" height="90" rx="3" fill="#5fd08a"/>
+<text x="700" y="668" fill="#e8eef0" font-size="16" font-weight="700">Redis</text>
+<text x="700" y="690" fill="#9aa8ae" font-size="13.5">Job queue · rate limits</text>
+<text x="700" y="709" fill="#9aa8ae" font-size="13.5">Realtime pub/sub · WS tickets</text>
+<rect x="340" y="800" width="660" height="130" rx="14" fill="none" stroke="#ff8a7a" stroke-width="1.4" stroke-dasharray="6 6"/>
+<text x="356" y="822" fill="#ff8a7a" font-size="12.5" font-weight="700" letter-spacing="1.6">SIGNAL PIPELINE</text>
+<rect x="360" y="840" width="270" height="70" rx="10" fill="#161c1f" stroke="#ff8a7a" stroke-width="1.6"/>
+<rect x="360" y="840" width="6" height="70" rx="3" fill="#ff8a7a"/>
+<text x="380" y="868" fill="#e8eef0" font-size="16" font-weight="700">Kafka (Redpanda)</text>
+<text x="380" y="890" fill="#9aa8ae" font-size="13.5">raw → normalized · dead-letter</text>
+<rect x="700" y="840" width="270" height="70" rx="10" fill="#161c1f" stroke="#ff8a7a" stroke-width="1.6"/>
+<rect x="700" y="840" width="6" height="70" rx="3" fill="#ff8a7a"/>
+<text x="720" y="868" fill="#e8eef0" font-size="16" font-weight="700">Consumers</text>
+<text x="720" y="890" fill="#9aa8ae" font-size="13.5">dedupe · normalize · correlate</text>
+<rect x="1100" y="470" width="460" height="190" rx="14" fill="none" stroke="#9aa8ae" stroke-width="1.4" stroke-dasharray="6 6"/>
+<text x="1116" y="492" fill="#9aa8ae" font-size="12.5" font-weight="700" letter-spacing="1.6">CROSS-CUTTING</text>
+<text x="1124" y="514" fill="#e8eef0" font-size="14">• HMAC-chained audit log</text>
+<text x="1124" y="544" fill="#e8eef0" font-size="14">• Prometheus HTTP metrics</text>
+<text x="1124" y="574" fill="#e8eef0" font-size="14">• Optional Sentry, scrubbed</text>
+<text x="1124" y="604" fill="#e8eef0" font-size="14">• LLMOps: evals, budgets, breakers</text>
+<text x="1124" y="634" fill="#e8eef0" font-size="14">• Backup and restore drill, retention</text>
+<rect x="1100" y="700" width="460" height="230" rx="14" fill="none" stroke="#5fd08a" stroke-width="1.4" stroke-dasharray="6 6"/>
+<text x="1116" y="722" fill="#5fd08a" font-size="12.5" font-weight="700" letter-spacing="1.6">QUALITY GATES</text>
+<text x="1124" y="748" fill="#e8eef0" font-size="14">• 450+ backend and ~200 frontend tests</text>
+<text x="1124" y="784" fill="#e8eef0" font-size="14">• Playwright E2E through real OIDC login</text>
+<text x="1124" y="820" fill="#e8eef0" font-size="14">• k6 load test and a dependency-failure drill</text>
+<text x="1124" y="856" fill="#e8eef0" font-size="14">• pip-audit · pnpm audit · Trivy · Dependabot</text>
+<text x="1124" y="892" fill="#e8eef0" font-size="14">• Coverage floor and migration checks in CI</text>
+<path d="M240 255 H340" fill="none" stroke="#5bc8d8" stroke-width="1.8" marker-end="url(#a-5bc8d8)"/>
+<text x="290" y="245" fill="#5bc8d8" font-size="12.5" text-anchor="middle">HTTPS</text>
+<path d="M470 190 V130" fill="none" stroke="#6ea8fe" stroke-width="1.8" marker-end="url(#a-6ea8fe)" marker-start="url(#s-6ea8fe)"/>
+<text x="478" y="164" fill="#6ea8fe" font-size="12.5" text-anchor="start">OIDC code + PKCE</text>
+<path d="M470 300 V380" fill="none" stroke="#5bc8d8" stroke-width="1.8" marker-end="url(#a-5bc8d8)"/>
+<text x="478" y="346" fill="#9aa8ae" font-size="12.5" text-anchor="start">bearer token added server-side</text>
+<path d="M240 460 H340" fill="none" stroke="#6ea8fe" stroke-width="1.8" marker-end="url(#a-6ea8fe)"/>
+<text x="290" y="449" fill="#6ea8fe" font-size="11.5" text-anchor="middle">signed webhook</text>
+<path d="M340 505 H310 V875 H360" fill="none" stroke="#ff8a7a" stroke-width="1.8" marker-end="url(#a-ff8a7a)"/>
+<text x="300" y="700" fill="#ff8a7a" font-size="12.5" text-anchor="middle" transform="rotate(-90 300 700)">publish</text>
+<path d="M600 460 H700" fill="none" stroke="#f2b441" stroke-width="1.8" marker-end="url(#a-f2b441)"/>
+<text x="650" y="450" fill="#f2b441" font-size="12.5" text-anchor="middle">enqueue</text>
+<path d="M470 520 V600" fill="none" stroke="#5fd08a" stroke-width="1.8" marker-end="url(#a-5fd08a)" marker-start="url(#s-5fd08a)"/>
+<text x="478" y="566" fill="#9aa8ae" font-size="12.5" text-anchor="start">read / write</text>
+<path d="M850 550 V600" fill="none" stroke="#5fd08a" stroke-width="1.8" marker-end="url(#a-5fd08a)" marker-start="url(#s-5fd08a)"/>
+<text x="858" y="584" fill="#9aa8ae" font-size="12.5" text-anchor="start">checkpoints · queue</text>
+<path d="M630 875 H700" fill="none" stroke="#ff8a7a" stroke-width="1.8" marker-end="url(#a-ff8a7a)"/>
+<path d="M835 840 V750" fill="none" stroke="#ff8a7a" stroke-width="1.8" marker-end="url(#a-ff8a7a)"/>
+<text x="843" y="786" fill="#9aa8ae" font-size="12.5" text-anchor="start">create and correlate incidents</text>
+<path d="M860 380 V90 H1100" fill="none" stroke="#6ea8fe" stroke-width="1.8" marker-end="url(#a-6ea8fe)"/>
+<path d="M920 380 V225 H1100" fill="none" stroke="#f2b441" stroke-width="1.8" marker-end="url(#a-f2b441)"/>
+<path d="M980 380 V360 H1100" fill="none" stroke="#6ea8fe" stroke-width="1.8" marker-end="url(#a-6ea8fe)"/>
+<text x="1006" y="80" fill="#6ea8fe" font-size="11.5" text-anchor="start">ask for analysis</text>
+<text x="930" y="215" fill="#f2b441" font-size="11.5" text-anchor="start">read code · PR on approval</text>
+<text x="40" y="975" fill="#9aa8ae" font-size="13">Modular monolith: API + worker from one codebase, console talks to the API only over HTTP. Runs on Docker Compose; cloud deployment is next.</text>
+</svg>

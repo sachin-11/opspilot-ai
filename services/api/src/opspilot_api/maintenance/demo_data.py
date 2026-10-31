@@ -456,6 +456,35 @@ async def age_incident(session: AsyncSession, incident_id: uuid.UUID, age_minute
     await session.commit()
 
 
+async def settle_review_events(session: AsyncSession, incident_id: uuid.UUID) -> None:
+    """Place the investigation outcome shortly after the rest of the (back-dated) timeline.
+
+    The worker records its events at the real current time, which would otherwise land hours
+    after an incident that the seed back-dated, and the console would show a review that
+    happened after the incident was already resolved.
+    """
+    review_types = {EventType.INVESTIGATION_COMPLETED.value, EventType.INVESTIGATION_REJECTED.value}
+    events = list(
+        await session.scalars(
+            select(IncidentEvent)
+            .where(IncidentEvent.incident_id == incident_id)
+            .order_by(IncidentEvent.occurred_at, IncidentEvent.created_at)
+        )
+    )
+    others = [event for event in events if event.event_type not in review_types]
+    reviews = [event for event in events if event.event_type in review_types]
+    if not others or not reviews:
+        return
+    now = datetime.now(UTC)
+    base = max(event.occurred_at for event in others)
+    for index, event in enumerate(reviews):
+        event.occurred_at = event.created_at = min(base + timedelta(minutes=8 + 2 * index), now)
+    incident = await session.get(Incident, incident_id)
+    if incident is not None:
+        incident.updated_at = max(event.occurred_at for event in events)
+    await session.commit()
+
+
 async def owner_actor(session: AsyncSession, workspace_id: uuid.UUID) -> Any:
     membership = await session.scalar(
         select(WorkspaceMembership)
@@ -541,6 +570,8 @@ async def investigate(
         )
     enqueue_review_resume(settings, workspace_id, investigation.id, review.id)
     await wait_for_investigation(factory, investigation.id, TERMINAL_INVESTIGATION, max_wait)
+    async with factory() as session:
+        await settle_review_events(session, incident.id)
 
 
 def signal_payloads(now: datetime) -> list[tuple[str, dict[str, Any]]]:
@@ -674,6 +705,19 @@ async def run(args: argparse.Namespace) -> int:
                 for item in await session.scalars(select(Workspace).order_by(Workspace.name)):
                     print(f"{item.slug:30} {item.id}  {item.name}")
                 return 0
+            if args.retime_existing:
+                target = await find_workspace(session, args.workspace)
+                if target is None:
+                    print(
+                        f"workspace '{args.workspace}' not found; run with --list", file=sys.stderr
+                    )
+                    return 1
+                for scenario in SCENARIOS:
+                    found = await find_incident(session, target.id, scenario.incident_title)
+                    if found is not None:
+                        await settle_review_events(session, found.id)
+                print("Investigation outcomes re-timed inside each demo incident's timeline.")
+                return 0
             workspace = await find_workspace(session, args.workspace)
             if workspace is None:
                 print(f"workspace '{args.workspace}' not found; run with --list", file=sys.stderr)
@@ -726,6 +770,11 @@ def main() -> None:
     )
     parser.add_argument("--workspace", help="workspace slug or UUID to fill (see --list)")
     parser.add_argument("--list", action="store_true", help="list workspaces and exit")
+    parser.add_argument(
+        "--retime-existing",
+        action="store_true",
+        help="move investigation outcomes of already-seeded scenarios inside their timelines",
+    )
     parser.add_argument("--no-investigations", dest="investigations", action="store_false")
     parser.add_argument("--no-signals", dest="signals", action="store_false")
     parser.add_argument(
