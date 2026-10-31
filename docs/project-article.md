@@ -114,6 +114,10 @@ These runs use the deterministic provider, so they test the harness, the graders
 
 **A first real-model check.** A separate, capped, opt-in command sends redacted golden cases to a real model. I ran it with Claude Haiku on 10 triage cases for roughly ten US cents. It first scored **0 of 10**. The cause was not the model: my evaluation adapter forbade the model from returning a field the grader requires and never defined the label vocabulary, so those cases could not pass by construction, something the offline runs could never reveal. After fixing the adapter (with a regression test) the same cases scored **10 of 10**. That is a small sample and the prompt was adjusted after seeing those failures, so I treat it as a smoke test that proved the harness and the model now agree, not as a benchmark. Both reports and the caveats are in [real-model-eval.md](real-model-eval.md).
 
+![Real-model evaluation](images/21-real-model-eval.png)
+
+*Image 21. The two real-model runs side by side. The report command writes files rather than database rows, so this card is rendered from the two reports (source: `docs/real-model-eval-card.html`).*
+
 ## How it is built
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy and Alembic, LangGraph, RQ. Strict typing with mypy, ruff for style.
@@ -161,5 +165,6 @@ It runs locally with Docker Compose and in GitHub Actions. It has **not** been d
 | 18 | `images/18-llmops-overview.png` | LLM quality trend |
 | 19 | `images/19-llmops-evaluations.png` | Evaluation runs |
 | 20 | `images/20-llmops-regression-blocked.png` | Regression caught by hard gates |
+| 21 | `images/21-real-model-eval.png` | Real-model evaluation, before and after the fix |
 
 Regenerate the screenshots with `node apps/web/scripts/capture-screenshots.mjs` against a stack that has the demo data.

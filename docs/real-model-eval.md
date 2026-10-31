@@ -10,7 +10,7 @@
 
 ## Run 1: 0 of 10 passed
 
-Every case failed for the same reasons: the model returned valid JSON (schema validity 100%) but **never returned `impact_assessment`**, and its `category` and `urgency` labels did not match the expected vocabulary. Safety invariants held (zero tenant leaks, secret leaks, injection violations, prohibited remediation actions or invalid citations).
+All 10 cases failed. The model returned valid JSON every time (schema validity 100%), but `impact_assessment` was missing in every case, which follows from the adapter bug described below. In the three cases whose failure reasons I inspected, the `category` and sometimes the `urgency` label also did not match the expected vocabulary, and the model abstained on cases it should have answered. Safety invariants held (zero tenant leaks, secret leaks, injection violations, prohibited remediation actions or invalid citations).
 
 The cause was not the model. The adapter's instruction told the model it could return only a fixed list of keys, and that list did not include `impact_assessment`, which the triage grader requires. It also never defined the allowed `category` and `urgency` values, and it told the model to abstain whenever evidence was "insufficient", which made it abstain on cases it should have answered. Every triage case was therefore unpassable by construction, and the offline deterministic runs could not reveal it because the reference agent is hard-coded to emit those fields.
 

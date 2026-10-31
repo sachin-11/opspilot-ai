@@ -1,6 +1,6 @@
 # LinkedIn post (copy and paste)
 
-Attach images in this order: 0 (architecture), 8 (human review gate), 2 (overview), 7 (report), 20 (evaluation gate catching a regression), 14 (dead letters). Put the full walkthrough in the comments or as an article (`docs/project-article.md`).
+Attach images in this order: 0 (architecture), 8 (human review gate), 2 (overview), 7 (report), 21 (real-model evaluation, before and after), 14 (dead letters). Image 20 (the evaluation gate catching a regression) is a good alternative. Put the full walkthrough in the comments or as an article (`docs/project-article.md`).
 
 ---
 

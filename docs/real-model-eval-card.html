@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Real-model evaluation</title>
+<style>
+  :root { --bg:#0f1315; --panel:#161c1f; --line:#2b353a; --ink:#e8eef0; --muted:#9aa8ae; --amber:#f2b441; --ok:#5fd08a; --bad:#ff7a6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; width:1440px; height:900px; background:var(--bg); color:var(--ink);
+         font-family:"Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif; padding:44px 56px; }
+  .eyebrow { color:var(--amber); font:700 13px ui-monospace, Consolas, monospace; letter-spacing:.18em; text-transform:uppercase; }
+  h1 { margin:10px 0 6px; font-size:40px; font-weight:800; }
+  .sub { color:var(--muted); font-size:17px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:28px; margin-top:30px; }
+  .card { background:var(--panel); border:1.6px solid var(--line); border-radius:14px; padding:26px 28px; }
+  .card.bad { border-color:var(--bad); } .card.ok { border-color:var(--ok); }
+  .tag { font:700 12px ui-monospace, Consolas, monospace; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
+  .score { font-size:84px; font-weight:800; line-height:1.05; margin:8px 0 2px; }
+  .bad .score { color:var(--bad); } .ok .score { color:var(--ok); }
+  .what { color:var(--muted); font-size:16px; margin-bottom:16px; min-height:44px; }
+  table { width:100%; border-collapse:collapse; font-size:16px; }
+  td { padding:9px 0; border-top:1px solid var(--line); } td:last-child { text-align:right; font-weight:600; }
+  td:first-child { color:var(--muted); }
+  .zero { color:var(--ok); }
+  .why { margin-top:14px; padding:12px 14px; background:#1d1513; border-left:3px solid var(--bad); font-size:15px; color:#ffd5cf; line-height:1.45; }
+  .fix { margin-top:14px; padding:12px 14px; background:#101d16; border-left:3px solid var(--ok); font-size:15px; color:#cdeedb; line-height:1.45; }
+  .foot { margin-top:26px; padding:16px 20px; border:1px dashed var(--amber); border-radius:10px; color:#f6dfaa; font-size:16px; line-height:1.5; }
+  .foot b { color:var(--amber); }
+</style>
+</head>
+<body>
+  <div class="eyebrow">LLMOps &middot; real-model evaluation</div>
+  <h1>claude-haiku-5-5 on 10 triage cases</h1>
+  <div class="sub">Capped run from the <b>real-eval</b> command &middot; redacted golden cases &middot; development and validation splits &middot; nothing published</div>
+
+  <div class="grid">
+    <div class="card bad">
+      <div class="tag">Run 1 &middot; before the fix</div>
+      <div class="score">0 / 10</div>
+      <div class="what">passed &mdash; valid JSON every time, but a required field was missing</div>
+      <table>
+        <tr><td>Schema validity</td><td>100%</td></tr>
+        <tr><td>Safety violations (5 invariants)</td><td class="zero">0</td></tr>
+        <tr><td>Latency p50 / p95</td><td>2.0 s / 2.8 s</td></tr>
+        <tr><td>Tokens</td><td>6,873</td></tr>
+        <tr><td>Spend (assumed rates)</td><td>$0.092</td></tr>
+      </table>
+      <div class="why"><b>Cause:</b> my eval adapter did not allow the model to return <code>impact_assessment</code>, which the triage grader requires, and never defined the label vocabulary. The cases could not pass by construction.</div>
+    </div>
+
+    <div class="card ok">
+      <div class="tag">Run 2 &middot; after the fix</div>
+      <div class="score">10 / 10</div>
+      <div class="what">passed &mdash; same cases, same model, same cost cap</div>
+      <table>
+        <tr><td>Schema validity</td><td>100%</td></tr>
+        <tr><td>Safety violations (5 invariants)</td><td class="zero">0</td></tr>
+        <tr><td>Latency p50 / p95</td><td>1.8 s / 3.1 s</td></tr>
+        <tr><td>Tokens</td><td>8,810</td></tr>
+        <tr><td>Spend (assumed rates)</td><td>$0.097</td></tr>
+      </table>
+      <div class="fix"><b>Fix:</b> the instruction now names every graded field and defines the categories and urgency levels. A regression test keeps the prompt and the grader in step.</div>
+    </div>
+  </div>
+
+  <div class="foot"><b>Read this as a smoke test, not a benchmark.</b> Ten cases only, and the prompt was adjusted after seeing run 1's failures on the same cases. Costs use deliberately high assumed rates ($5 / $25 per million tokens) so the $0.50 cap could not be exceeded; the true spend is at or below these figures.</div>
+</body>
+</html>
