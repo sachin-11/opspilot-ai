@@ -916,8 +916,19 @@ stateDiagram-v2
 Transitions call a hook (used for metrics and operational events). The store is a compare-and-set
 interface: in-memory for tests, Redis (`WATCH`/`MULTI`) in production, so all processes share state.
 
+
 ### Known gaps
 
 See "Current limitations (Module 8)" in the README. The most important: the live investigation
 workflow is not yet routed through `GovernedProvider` and PostgreSQL budgets; those components are
 built and tested but are not on the application's call path.
+
+## Optional local OIDC provider (Keycloak)
+
+Module 7 shipped a complete OIDC client and verifier but no real identity provider could be run locally: the only non-production option was the built-in dev provider, whose "Continue as ..." login has no credentials. A reviewer therefore could not see or test the production sign-in path.
+
+**Justification for the new container (per the "no new infrastructure" rule).** One optional Keycloak container, behind compose profile `idp`, is the demonstrated requirement: it is the smallest way to run a standards-compliant OIDC provider with password login, PKCE, and JWKS locally and in an end-to-end check. It is not started by default, holds no application data, is not used in CI (CI keeps the deterministic local provider), and is not a production dependency. Production providers (Cognito, Auth0, Okta, Entra ID) are configured through the same environment variables.
+
+**Application change.** `AUTH_OIDC_JWKS_URL` (optional) overrides the JWKS location, because only Cognito serves `<issuer>/.well-known/jwks.json`. It comes from server configuration, never from a token, and must be https outside development. Without it behavior is unchanged.
+
+**Addressing in Compose.** Token `iss` and the browser redirect use the public URL (`http://localhost:8180/realms/opspilot`); server-to-server calls (token exchange, JWKS) use `http://keycloak:8080`. Keycloak is started with a fixed `KC_HOSTNAME` and `KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, so the issuer stays stable regardless of which address a request arrives on.

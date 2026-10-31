@@ -142,9 +142,10 @@ class OidcProvider(IdentityProvider):
         self.algorithms = list(settings.AUTH_OIDC_ALGORITHMS)
         self.token_use = settings.AUTH_OIDC_TOKEN_USE
         self.skew = settings.AUTH_CLOCK_SKEW_SECONDS
-        # The JWKS URL is derived from the configured issuer only (Cognito/OIDC convention).
+        # The JWKS URL comes from server configuration only: an explicit setting, else
+        # derived from the configured issuer (Cognito convention). Never from a token.
         self.jwks = jwks or JwksClient(
-            f"{self.issuer}/.well-known/jwks.json",
+            settings.AUTH_OIDC_JWKS_URL or f"{self.issuer}/.well-known/jwks.json",
             settings.AUTH_JWKS_CACHE_SECONDS,
             settings.AUTH_JWKS_TIMEOUT_SECONDS,
         )

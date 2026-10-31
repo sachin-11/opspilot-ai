@@ -509,3 +509,33 @@ def test_audit_metadata_never_contains_secrets_and_is_bounded() -> None:
 
 
 Factory = Callable[..., Any]
+
+
+def test_jwks_url_defaults_to_issuer_convention_and_can_be_overridden() -> None:
+    default = OidcProvider(
+        make_settings(AUTH_PROVIDER="oidc", AUTH_OIDC_ISSUER=ISSUER, AUTH_OIDC_AUDIENCE=CLIENT)
+    )
+    assert default.jwks.url == f"{ISSUER}/.well-known/jwks.json"
+    keycloak_jwks = "http://keycloak:8080/realms/opspilot/protocol/openid-connect/certs"
+    explicit = OidcProvider(
+        make_settings(
+            AUTH_PROVIDER="oidc",
+            AUTH_OIDC_ISSUER="http://localhost:8180/realms/opspilot",
+            AUTH_OIDC_AUDIENCE="opspilot-web",
+            AUTH_OIDC_JWKS_URL=keycloak_jwks,
+        )
+    )
+    assert explicit.jwks.url == keycloak_jwks
+    assert explicit.issuer == "http://localhost:8180/realms/opspilot"
+
+
+def test_plain_http_jwks_url_is_rejected_outside_development() -> None:
+    with pytest.raises(ValueError, match="AUTH_OIDC_JWKS_URL must be https"):
+        make_settings(
+            APP_ENV=Environment.STAGING,
+            AUTH_PROVIDER="oidc",
+            AUTH_OIDC_ISSUER=ISSUER,
+            AUTH_OIDC_AUDIENCE=CLIENT,
+            AUTH_OIDC_JWKS_URL="http://idp.example.com/keys",
+            AUTH_AUDIT_KEY="a-strong-audit-key-for-tests-0123456789abcdef",
+        )
