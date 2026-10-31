@@ -1,0 +1,73 @@
+name: LLMOps real-model evaluation (manual)
+
+# Optional tier. It never runs automatically: only a maintainer can dispatch it, it needs the
+# `llmops-real-eval` environment (add required reviewers there), it is skipped on forks, and the
+# CLI enforces a hard maximum cost. It produces a comparison report and never publishes a prompt.
+on:
+  workflow_dispatch:
+    inputs:
+      max_cost_usd:
+        description: Hard maximum spend for this run in USD
+        required: true
+        default: "1.00"
+      limit:
+        description: Maximum number of cases
+        required: true
+        default: "20"
+      rate_version:
+        description: Pricing rate version label recorded in the report
+        required: true
+      input_per_million:
+        description: Input price per million tokens (USD)
+        required: true
+      output_per_million:
+        description: Output price per million tokens (USD)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  real-eval:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    environment: llmops-real-eval
+    defaults:
+      run:
+        working-directory: services/api
+    env:
+      APP_ENV: test
+      CORS_ORIGINS: http://localhost:3300
+      POSTGRES_DB: unused
+      POSTGRES_USER: unused
+      POSTGRES_PASSWORD: unused
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://127.0.0.1:6379/0
+      AI_PRIMARY_PROVIDER: anthropic
+      AI_PRIMARY_MODEL: ${{ vars.LLMOPS_REAL_EVAL_MODEL }}
+      AI_PRIMARY_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LLMOPS_REAL_EVAL_ENABLED: "true"
+      LLMOPS_REAL_EVAL_MAX_COST_USD: ${{ inputs.max_cost_usd }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
+      - run: uv python install 3.12
+      - run: uv sync --frozen
+      - name: Run capped real-model evaluation
+        run: >-
+          uv run python -m opspilot_api.llmops.cli real-eval
+          --max-cost-usd "${{ inputs.max_cost_usd }}" --limit "${{ inputs.limit }}"
+          --rate-version "${{ inputs.rate_version }}"
+          --input-per-million "${{ inputs.input_per_million }}"
+          --output-per-million "${{ inputs.output_per_million }}"
+          --out evaluation-reports
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: llmops-real-eval-report
+          path: services/api/evaluation-reports/
+          if-no-files-found: ignore

@@ -35,3 +35,6 @@ services/api/repository-evaluation*.md
 # Local benchmark output
 benchmark-results/
 services/api/benchmark-results/
+
+# LLMOps evaluation reports (generated)
+evaluation-reports/

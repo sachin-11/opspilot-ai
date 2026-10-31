@@ -763,3 +763,161 @@ Security-relevant actions create an `audit_events` row containing actor type/IDs
 
 A Lua token bucket per `(rule, identity)` runs atomically in Redis. Identity is the user ID, API-key ID, webhook source public ID, or HMAC'd IP; keys hash the identity, carry a TTL of the refill window plus a minute, and therefore cannot grow unboundedly. Denial returns 429 with `Retry-After`. High-risk rules (approvals, remediation/investigation starts, invitations) fail closed on Redis errors; read-like rules fail open.
 
+
+## Module 8 LLMOps architecture
+
+No new infrastructure was added: LLMOps reuses PostgreSQL (state, triggers, atomic counters), Redis
+(shared breaker state, RQ queue), and the existing RQ worker (`opspilot_api.llmops.jobs.run_eval_job`).
+The web app reaches it only through `/api/v1/workspaces/{id}/llmops`; routes are classified in the
+central route policy and are human-only (no API-key scopes).
+
+### Prompt and model registry
+
+- `prompt_definitions` / `prompt_versions` are workspace-scoped. A version stores the system template,
+  an optional developer template, input/output schemas, change notes, and a SHA-256 content hash.
+  System instructions never interpolate fields marked `untrusted` in the input schema; untrusted
+  evidence is passed only as separate delimited data. Credentials in templates are rejected.
+- Database guards: a trigger rejects content changes once a version leaves `draft`, and a partial
+  unique index allows one default published version per definition.
+- `pricing_rates` (immutable) and `model_configurations` (versioned, platform-level) hold provider,
+  model identifier, capability tier, limits, structured-output/tool support, timeout, retry policy,
+  environments, and fallback. Model names exist only as seed data (`seed.py`), never in domain logic.
+
+```mermaid
+flowchart LR
+    A[Create version<br/>credential + untrusted-field checks] --> B[candidate]
+    B --> C[Evaluation run on the golden dataset<br/>deterministic graders first]
+    C --> D{Gate report}
+    D -- hard safety gate failed --> X[Blocked<br/>no override possible]
+    D -- soft gate failed --> E{Owner override<br/>with reason?}
+    E -- no --> X
+    E -- yes --> F[Audit event]
+    D -- all gates pass --> G[Publish: single default]
+    F --> G
+    G --> H[(published, immutable)]
+    H -. rollback .-> I[Move default pointer<br/>history untouched]
+```
+
+### Trace flow
+
+`GovernedProvider` wraps any `ModelProvider` and plugs into the existing `ProviderRouter`, so retry
+and fallback semantics are unchanged. Per call it checks the breaker, reserves budget, calls the
+provider, records usage and a trace, and reconciles. The trace carries workflow, node, prompt
+version id and hash, routing-policy version, provider/model, tool calls with sanitized arguments,
+structured-output validity, retry/fallback events, tokens, latency, estimated cost, error category,
+and final status. `CompositeTracer` sanitizes once before any adapter runs; the internal adapters
+must succeed, while the optional LangSmith exporter is isolated and best-effort.
+
+### Evaluation execution and grader ordering
+
+```mermaid
+flowchart TD
+    Q[POST eval-runs] --> R[(eval_runs: queued)]
+    R --> W[RQ worker: run_eval_job]
+    W --> S[select_cases by purpose<br/>test split only for gate runs]
+    S --> T[System under test<br/>fake reference agent in CI]
+    T --> G1[Safety graders<br/>tenant, secret, injection, remediation]
+    G1 --> G2[Suite quality graders<br/>schema, tools, citations, retrieval, abstention...]
+    G2 --> V{Judge configured<br/>and calibrated?}
+    V -- no --> M[Aggregate metrics + flakiness over repeats]
+    V -- yes --> J[LLM judge: structured scores only]
+    J --> M
+    M --> GT[Gate evaluation vs baseline]
+    GT --> O[(eval_case_results + report JSON/Markdown)]
+```
+
+A case passes only if every repeat passes. Output hashes (excluding latency and token fields) are
+compared across repeats; any difference is a flaky case, which is a hard gate failure. A safety
+failure is final: `combine_verdict` ignores a judge when the deterministic verdict failed.
+
+### Human calibration
+
+Labels (`human_labels`) are one per reviewer per result, never for two repeats of the same case by
+the same reviewer, and edits record the previous value in the audit log. Cohen's kappa and percent
+agreement compare reviewers with each other and the judge with humans; a judge is calibrated only
+above the configured floors and is otherwise advisory.
+
+### Prompt publication gate
+
+Publication loads the evaluation run, verifies it evaluated this exact version id, rebuilds the
+`GateReport`, and calls `prompt_registry.publish`. Hard invariants (zero tenant/secret/injection/
+remediation/invalid-citation/flaky) can never be overridden; soft gates can be overridden only by an
+owner with a written reason, which is audited with the list of overridden gates.
+
+### Routing policy
+
+`routing.route` is a pure function of a typed `RoutingInput` and a versioned `RoutingPolicy`. The
+input has no free-text field, so user-controlled text cannot select a model. Candidates are filtered
+by enablement, environment, workflow, structured-output/tool capability, context size, workspace
+provider policy, breaker state, capability tier for the risk level, and cost ceiling (an unknown rate
+is treated as unaffordable, never free). Protected (high/critical) decisions require a minimum tier,
+ignore experiment overrides, and have no weaker fallbacks. A candidate policy can run in shadow
+(`shadow_route`) and is only compared, never executed.
+
+```mermaid
+flowchart TD
+    I[Trusted RoutingInput] --> P[Rule for workflow/node]
+    P --> F1[Filter: enabled, env, workflow]
+    F1 --> F2[Filter: capabilities + context size]
+    F2 --> F3[Filter: workspace policy + breaker not open]
+    F3 --> F4[Filter: tier for risk + cost ceiling]
+    F4 --> Z{Any eligible?}
+    Z -- no --> N[NoEligibleModel with reason codes<br/>fail loudly, no silent downgrade]
+    Z -- yes --> S[Primary + fallback chain<br/>same filters applied]
+    S --> B[Reserve budget]
+    B --> C[Provider call]
+    C -- retryable error --> FB[Next in chain if allowed]
+    C -- config/auth/invalid output --> E[Surface error, no fallback]
+    B -- hard cap --> H[Block, non-retryable, no model switch]
+```
+
+### A/B assignment
+
+`assign_variant` hashes `(experiment id, salt, unit, unit id)` into 10,000 buckets; the first
+`allocation x 100` go to the candidate. Rows are unique per `(experiment, unit)` and inserted with
+`ON CONFLICT DO NOTHING`, so retries and refreshes read the same arm. Side-effect authorization nodes
+and high-risk calls are never eligible. Analysis lives in `stats.py` and `experiments.analyze`.
+
+### Budget reservation and reconciliation
+
+```mermaid
+sequenceDiagram
+    participant G as GovernedProvider
+    participant DB as PostgreSQL counters
+    participant P as Provider
+    G->>DB: reserve (one UPDATE per scope, sorted, one transaction)
+    alt cap would be exceeded
+        DB-->>G: no row updated
+        G->>DB: rollback all scopes, hard_block event
+        G-->>G: BudgetBlocked (non-retryable)
+    else fits
+        DB-->>G: reservation id, soft_warning event if threshold crossed
+        G->>P: call
+        P-->>G: usage (tokens)
+        G->>DB: reconcile actual cost, release the unused part
+    end
+    Note over DB: expire_stale releases reservations that never reconcile.<br/>A late reconcile is still charged and flagged.
+```
+
+`reconcile_against_ledger` compares counters with the append-only `usage_events` sum to detect drift.
+
+### Circuit-breaker transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> closed
+    closed --> open: consecutive failures, error/timeout rate,<br/>mean latency, or rate limiting
+    open --> half_open: open window elapsed
+    half_open --> closed: required probes succeed
+    half_open --> open: a probe fails
+    closed --> closed: config/auth errors surfaced, not counted
+```
+
+Transitions call a hook (used for metrics and operational events). The store is a compare-and-set
+interface: in-memory for tests, Redis (`WATCH`/`MULTI`) in production, so all processes share state.
+
+### Known gaps
+
+See "Current limitations (Module 8)" in the README. The most important: the live investigation
+workflow is not yet routed through `GovernedProvider` and PostgreSQL budgets; those components are
+built and tested but are not on the application's call path.

@@ -19,6 +19,7 @@ export const NAV_PERMISSIONS: Record<string, string> = {
   "/observability/sources": "observability.read",
   "/observability/signals": "observability.read",
   "/observability/dead-letters": "observability.read",
+  "/llmops": "llmops.read",
   "/settings/services": "services.read",
   "/settings/members": "members.manage",
   "/settings/api-keys": "api_keys.manage",

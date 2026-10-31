@@ -5,6 +5,7 @@ description = "OpsPilot AI backend: FastAPI API and RQ worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.1",
+    "anthropic>=2.3.0",
     "boto3>=1.43.122",
     "confluent-kafka>=2.16.1",
     "fastapi>=0.162.0",

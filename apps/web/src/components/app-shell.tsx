@@ -7,7 +7,7 @@ import { setCsrfToken } from "@/lib/api";
 import { can, NAV_PERMISSIONS, ROLE_LABELS } from "@/lib/permissions";
 import { useOps } from "./providers";
 
-const links = [["/", "Overview"], ["/incidents", "Incidents"], ["/incidents/new", "Create incident"], ["/remediations", "Remediations"], ["/knowledge", "Knowledge"], ["/knowledge/search", "Knowledge search"], ["/repositories", "Repositories"], ["/repositories/search", "Code search"], ["/integrations/github", "GitHub"], ["/observability", "Pipeline"], ["/observability/sources", "Obs sources"], ["/observability/signals", "Signals"], ["/observability/dead-letters", "Dead letters"], ["/settings/services", "Services"], ["/settings/members", "Members"], ["/settings/api-keys", "API keys"], ["/settings/audit", "Audit log"]] as const;
+const links = [["/", "Overview"], ["/incidents", "Incidents"], ["/incidents/new", "Create incident"], ["/remediations", "Remediations"], ["/knowledge", "Knowledge"], ["/knowledge/search", "Knowledge search"], ["/repositories", "Repositories"], ["/repositories/search", "Code search"], ["/integrations/github", "GitHub"], ["/observability", "Pipeline"], ["/observability/sources", "Obs sources"], ["/observability/signals", "Signals"], ["/observability/dead-letters", "Dead letters"], ["/llmops", "LLMOps"], ["/settings/services", "Services"], ["/settings/members", "Members"], ["/settings/api-keys", "API keys"], ["/settings/audit", "Audit log"]] as const;
 
 export function AppShell({children}: {children: React.ReactNode}) {
   const path = usePathname();
@@ -32,7 +32,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
           : <p className="workspace-name">{workspace?.name ?? "No workspace"}</p>}
         {user && <p className="muted current-user" aria-label="Signed in user">{user.display_name ?? user.email ?? "Signed in"}{role ? ` · ${ROLE_LABELS[role] ?? role}` : ""}</p>}
       </div>
-      <nav aria-label="Primary navigation">{visible.map(([href, label]) => <Link key={href} href={href} className={path === href || (href === "/knowledge" && path.startsWith("/knowledge/") && path !== "/knowledge/search") || (href === "/repositories" && path.startsWith("/repositories/") && path !== "/repositories/search") || (href === "/remediations" && path.startsWith("/remediations/")) ? "active" : ""}>{label}</Link>)}</nav>
+      <nav aria-label="Primary navigation">{visible.map(([href, label]) => <Link key={href} href={href} className={path === href || (href === "/knowledge" && path.startsWith("/knowledge/") && path !== "/knowledge/search") || (href === "/repositories" && path.startsWith("/repositories/") && path !== "/repositories/search") || (href === "/remediations" && path.startsWith("/remediations/")) || (href === "/llmops" && path.startsWith("/llmops")) ? "active" : ""}>{label}</Link>)}</nav>
       <p className={`connection ${connection}`}><span aria-hidden="true">●</span> Realtime {connection}</p>
       <button className="button" onClick={() => void logout()} disabled={signingOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
     </aside>

@@ -31,6 +31,12 @@ class Permission(StrEnum):
     REMEDIATIONS_PUBLISH = "remediations.publish"
     API_KEYS_MANAGE = "api_keys.manage"
     AUDIT_READ = "audit.read"
+    LLMOPS_READ = "llmops.read"
+    LLMOPS_PROMPTS_MANAGE = "llmops.prompts.manage"
+    LLMOPS_EVALS_RUN = "llmops.evals.run"
+    LLMOPS_EVALS_LABEL = "llmops.evals.label"
+    LLMOPS_EXPERIMENTS_MANAGE = "llmops.experiments.manage"
+    LLMOPS_BUDGETS_MANAGE = "llmops.budgets.manage"
 
 
 P = Permission
@@ -55,6 +61,10 @@ _RESPONDER = _ANALYST | {
     P.REMEDIATIONS_REVIEW,
     P.SERVICES_MANAGE,
     P.INVESTIGATIONS_REVIEW,
+    # Reviewers may read LLMOps dashboards and label evaluation results; they cannot change
+    # prompts, run paid evaluations, or alter experiments and budgets.
+    P.LLMOPS_READ,
+    P.LLMOPS_EVALS_LABEL,
 }
 _ADMIN = _RESPONDER | {
     P.WORKSPACE_MANAGE,
@@ -66,6 +76,10 @@ _ADMIN = _RESPONDER | {
     P.REMEDIATIONS_PUBLISH,
     P.API_KEYS_MANAGE,
     P.AUDIT_READ,
+    P.LLMOPS_PROMPTS_MANAGE,
+    P.LLMOPS_EVALS_RUN,
+    P.LLMOPS_EXPERIMENTS_MANAGE,
+    P.LLMOPS_BUDGETS_MANAGE,
 }
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.VIEWER: _READ,

@@ -512,3 +512,167 @@ Unit tests use test-only settings and need no running services or real credentia
 - **"set X in .env" / `Field required` on startup:** a required variable is missing. Re-copy from `.env.example` (`scripts\bootstrap.ps1`).
 - **Integration tests time out on Windows:** use `127.0.0.1`, not `localhost`, for host-side `POSTGRES_HOST`/`REDIS_URL` (Compose publishes on IPv4 loopback).
 - **Changed `POSTGRES_PASSWORD` after first start:** the volume keeps the old one. Reset with `docker compose down -v` (deletes local data).
+
+## LLMOps (Module 8)
+
+Versioned prompts, a golden evaluation dataset, deterministic graders, a calibrated-judge
+abstraction, experiments, usage/cost accounting, atomic budgets, and provider circuit breakers.
+Everything required runs locally and in CI with **no paid, hosted, or credentialed service**.
+Code lives in `services/api/src/opspilot_api/llmops/`; the UI is under `apps/web/src/app/llmops`.
+
+### Prompt lifecycle
+
+`draft -> candidate -> published -> retired`. Prompts are **workspace-scoped**, so one tenant can
+never change another tenant's prompts. The six built-in Module 2 prompts are seeded as published
+`1.0.0` on first use.
+
+- `POST .../prompts/{id}/versions` creates a new version (never an in-place edit). Credentials in a
+  template and untrusted fields interpolated into instructions are rejected.
+- `POST .../publish` needs a completed evaluation run **that evaluated this exact version** and a
+  passing gate report. Failed gates block publication. Only an **owner** may override *soft* gates
+  (with a written reason, audited); safety invariants can never be overridden.
+- `POST .../rollback` moves the single default pointer to an older immutable version; history is
+  never rewritten. A database trigger rejects content changes to non-draft versions and a partial
+  unique index guarantees one default.
+
+### Dataset lifecycle
+
+`opspilot-golden` v1 has **104 cases in eight suites** (13 each): triage, tool selection,
+grounding, report quality, retrieval/citations, change correlation, remediation safety, and
+isolation/injection/abstention. Cases consolidate and extend the Module 2-6 fixtures. Published
+dataset versions are immutable (database triggers); a change imports a **new version**. Splits are
+`development` / `validation` / `test`: development runs only see development, tuning runs see
+development + validation, and only `gate` runs see the held-out test split. Duplicate and
+near-duplicate cases are detected (Jaccard over each case's distinguishing content). Exports are
+redacted. Production-derived cases need an explicit redaction attestation and an authorizing user,
+and are never promoted into the test split.
+
+### Evaluation commands
+
+```powershell
+cd services/api
+uv run python -m opspilot_api.llmops.cli ci --baseline tests/fixtures/llmops_baseline.json   # required CI tier, 3 repeats
+uv run python -m opspilot_api.llmops.cli compare --control baseline --candidate candidate      # control vs candidate
+uv run python -m opspilot_api.llmops.cli baseline --write tests/fixtures/llmops_baseline.json  # regenerate the golden baseline
+uv run python -m opspilot_api.llmops.cli export --out dataset.json                              # redacted export
+```
+
+Reports (`evaluation-reports/*.json` and `*.md`) are produced by every run. Runs created through
+the API (`POST /api/v1/workspaces/{id}/llmops/eval-runs`) execute asynchronously on the RQ worker.
+
+### Deterministic and LLM graders
+
+Deterministic graders run **first** and are pure functions: schema validity, required fields, field
+accuracy, tool selection and arguments, evidence-id validity, citation precision/recall, forbidden
+claims, required abstention, tenant leak, secret leak, prompt-injection compliance, status
+transitions, remediation policy, error classification, Recall@K, MRR, NDCG, and change-correlation
+Recall@K. Tenant, secret, injection, and remediation failures are **safety** failures: they fail the
+case regardless of any judge. The judge (`judge.py`) is a provider-neutral abstraction with a
+versioned rubric (`judge-rubric-v1`, poor/acceptable/excellent anchors), strict structured output
+(extra fields such as `reasoning` are rejected, so hidden reasoning cannot be stored), seeded
+randomized pairwise order, variant names kept out of prompts, repeated judgments with spread, and a
+verbosity-bias check. CI uses only the deterministic `FakeJudge`.
+
+The required CI tier runs a **rule-based reference agent** (`reference_agent.py`) that reads only
+`input_data`, never expected values, so the golden set tests real policies. It has three variants:
+`baseline` (shipped behavior, 103/104 pass: one honest known weakness on a paraphrase query),
+`candidate` (stemming + BM25, 104/104), and `regressing` (follows injections, leaks tenants/secrets,
+invents citations, auto-approves), which the gates must block. **With the fake tier, prompt text does
+not change behavior**: it proves the pipeline and gates, and the real-model tier evaluates wording.
+
+### Human calibration
+
+Reviewers label results from the queue on the rubric (1-5 per criterion, pass/fail, notes). Labels
+are upserted per reviewer, a reviewer cannot label two repeats of the same case, label changes are
+audited with the previous value, and Cohen's kappa measures inter-rater and judge-human agreement
+(`human.py`). A judge is **calibrated** only with at least 30 labelled cases, agreement of at least
+0.8, and kappa of at least 0.6. An uncalibrated judge never changes a verdict, and a run that uses a
+judge without calibration fails the `judge_agreement` gate.
+
+### CI quality gates
+
+Hard (not configurable, not overridable): zero tenant leaks, secret leaks, injection violations,
+prohibited remediation actions, invalid citations, and flaky cases. Soft (versioned `GateConfig`):
+schema validity, tool-selection accuracy, citation validity, required abstention, per-metric and
+per-case regression versus the baseline, P95 latency, average cost, and judge agreement. Latency and
+cost gates are **skipped, and reported as skipped**, when a run's metrics are synthetic. CI also
+runs a negative control that must fail: the regressing variant.
+
+### Experiments and statistics
+
+Assignment is a stable hash of `(experiment, salt, unit)` persisted once; refreshes, retries, and
+later allocation changes never reassign. The unit (workspace/user/investigation) is configurable.
+Remediation publication, approval, authorization, and policy decisions are excluded, as is any
+high/critical-risk call. An experiment needs a primary metric, at least one guardrail, a minimum
+sample size (at least 30 per arm), and an allocation of at most 50%. Analysis uses a two-sided
+two-proportion z-test with Wald confidence intervals (no p-value when an arm has fewer than 5
+successes or failures), Bonferroni-adjusted guardrails, a fixed-horizon assumption with repeated
+looks counted and flagged, an immediate safety stop, and **no automatic promotion**. Arm outcomes
+are computed from shadow/production-sample evaluation runs, not from live traffic.
+
+### Usage and cost accounting
+
+`usage_events` is append-only (triggers reject UPDATE/DELETE) and idempotent on the provider request
+id or internal usage id. Cost is `NULL` ("unavailable") whenever tokens or a rate are missing; it is
+never guessed. Pricing rates are immutable rows; a price change is a new version, and each event
+keeps the version it was costed with. Aggregation never rewrites events.
+
+### Budget reservations
+
+Reserve (atomic, all scopes or none), call, reconcile, release the unused part, expire stale
+reservations. In PostgreSQL each scope is charged by one conditional
+`UPDATE ... WHERE spent + reserved + :amount <= hard_limit`, so concurrent calls cannot overspend
+(verified with 24 concurrent reservations: exactly 3 of 0.30 fit under 1.00). Soft thresholds emit a
+warning event; a hard cap blocks new calls with a non-retryable error and **never switches to another
+model**; completed results stay readable. Unknown actual cost keeps the reserved ceiling as spend and
+is flagged unmetered. Raising a limit or disabling a budget needs a reason and is audited.
+
+### Provider circuit breakers
+
+`closed -> open -> half_open -> closed`. A breaker opens on consecutive failures, error-rate or
+timeout-rate windows, mean latency, or provider rate limiting. Configuration/authentication errors
+are surfaced and never counted as health failures. Half-open permits a bounded number of probes.
+State is shared through Redis (compare-and-set) and time is injected, so tests are deterministic.
+The provider-health endpoint reports `unknown` (never "healthy") if the shared store cannot be read.
+
+### Optional LangSmith tracing
+
+Off by default. With `LANGSMITH_TRACING=true` and a key, a best-effort exporter is added; if it is
+unreachable the workflow is unaffected (failures are counted and logged by class only). Every trace
+is sanitized **before** any adapter sees it: no keys, tokens, authorization headers, raw documents,
+full source, or reasoning fields. CI needs no LangSmith credentials.
+
+### Manual real-model evaluation (optional)
+
+Not run by CI. Preconditions: `LLMOPS_REAL_EVAL_ENABLED=true`, `AI_PRIMARY_PROVIDER=anthropic`,
+`AI_PRIMARY_MODEL`, and `AI_PRIMARY_API_KEY` in your own `.env` (never committed).
+
+```powershell
+uv run python -m opspilot_api.llmops.cli real-eval --max-cost-usd 0.50 --limit 20 `
+  --rate-version anthropic-2026-10-06-le100k --input-per-million 0.10 --output-per-million 0.50
+```
+
+It reserves the worst-case cost before every call and stops at the cap, sends only redacted,
+model-visible fields (never expected values, canaries, or secrets), refuses cases it cannot redact,
+uses only development/validation splits, records the model and pricing-rate version, and writes a
+report. It never publishes a prompt. The GitHub workflow `llmops-real-eval.yml` is
+`workflow_dispatch`-only, needs the `llmops-real-eval` environment, and is skipped on forks.
+
+### Current limitations (Module 8)
+
+- The live investigation/remediation workflow is **not yet routed** through `GovernedProvider`
+  (budget, breaker, usage, trace). The pieces are implemented and tested, and the PostgreSQL budget is
+  atomic, but the workflow still builds its provider as before (fake, or `UnsupportedProvider`), so
+  there is no paid call path in the app to govern yet. Wiring needs a real application provider
+  adapter plus PostgreSQL-backed budget and usage in the worker.
+- Published prompt text is versioned, gated, and audited, but the application does not yet render a
+  workspace-published prompt at runtime.
+- The judge is a library plus tests: it is not wired into API-created runs, and no judge has been
+  calibrated against real human labels yet.
+- Online sampling and dataset promotion are implemented as tested rules; they are not enqueued from
+  production traffic. Experiment arm outcomes come from evaluation runs, not live traffic.
+- Latency and tokens in fake-tier reports are derived from payload size and are labelled synthetic.
+  No real-model run has been executed in this repository.
+- The LangSmith exporter is covered by failure-isolation tests only; it was not run against the
+  hosted service. Langfuse is not implemented (the trace interface makes an adapter straightforward).
+- The Anthropic pricing seed models per-million rates for prompts up to 100K tokens only.

@@ -135,6 +135,25 @@ jobs:
         run: uv run pytest -m integration tests/test_auth_integration.py tests/test_remediation_integration.py -q
       - name: Verify audit-log integrity
         run: uv run python -m opspilot_api.auth.audit_verify
+      - name: LLMOps golden evaluation (fake provider, 3 repeats, gates, JSON and Markdown reports)
+        run: >-
+          uv run python -m opspilot_api.llmops.cli ci
+          --baseline tests/fixtures/llmops_baseline.json --out evaluation-reports
+      - name: LLMOps negative control (a regressing variant MUST be blocked by the gates)
+        run: |
+          if uv run python -m opspilot_api.llmops.cli ci --variant regressing --baseline tests/fixtures/llmops_baseline.json --out evaluation-reports; then
+            echo "regressing variant passed the gates: the quality gates are broken"
+            exit 1
+          fi
+      - name: LLMOps candidate-versus-control comparison
+        run: uv run python -m opspilot_api.llmops.cli compare --out evaluation-reports
+      - name: Upload LLMOps evaluation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: llmops-evaluation-reports
+          path: services/api/evaluation-reports/
+          if-no-files-found: ignore
       - name: Deterministic remediation fixture evaluation (fake model, local providers, Docker sandbox)
         run: >-
           uv run python -m opspilot_api.remediation.evaluation

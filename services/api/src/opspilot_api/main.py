@@ -23,6 +23,7 @@ from opspilot_api.infrastructure import (
 )
 from opspilot_api.investigations.router import router as investigations_router
 from opspilot_api.knowledge.router import router as knowledge_router
+from opspilot_api.llmops.router import router as llmops_router
 from opspilot_api.logging_config import configure_logging
 from opspilot_api.middleware import (
     CORRELATION_HEADER,
@@ -96,4 +97,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(repositories_router)
     app.include_router(observability_router)
     app.include_router(remediation_router)
+    app.include_router(llmops_router)
     return app

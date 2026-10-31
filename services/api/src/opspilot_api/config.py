@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     AI_AUTO_TRIGGER_ENABLED: bool = False
     LANGSMITH_TRACING: bool = False
     LANGSMITH_API_KEY: SecretStr | None = None
+    # LLMOps. Real-model evaluation is manual only and bounded by a hard cost cap.
+    LLMOPS_REAL_EVAL_ENABLED: bool = False
+    LLMOPS_REAL_EVAL_MAX_COST_USD: float = Field(default=5.0, gt=0, le=100)
+    LLMOPS_BUDGET_RESERVATION_TTL_SECONDS: int = Field(default=900, ge=30, le=7200)
+    LLMOPS_ONLINE_EVAL_SAMPLE_RATE: float = Field(default=0.0, ge=0, le=0.1)
 
     KNOWLEDGE_STORAGE_BACKEND: str = Field(default="local", pattern="^(local|s3)$")
     KNOWLEDGE_STORAGE_ROOT: str = Field(default="/app/data/knowledge", min_length=1)
