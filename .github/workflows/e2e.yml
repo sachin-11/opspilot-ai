@@ -41,6 +41,7 @@ jobs:
           set_env OIDC_TOKEN_URL "$kc_internal/token"
           set_env OIDC_ISSUER "$kc"
           set_env OIDC_JWKS_URL "$kc_internal/certs"
+          set_env OIDC_END_SESSION_URL "$kc/protocol/openid-connect/logout"
 
       - name: Start the database, Redis and API
         run: docker compose up -d --build --wait postgres redis api
