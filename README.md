@@ -522,6 +522,10 @@ sum(rate(opspilot_http_requests_total{status=~"5.."}[5m])) / sum(rate(opspilot_h
 histogram_quantile(0.95, sum by (le, route) (rate(opspilot_http_request_duration_seconds_bucket[5m])))
 ```
 
+## Dependency-failure drill
+
+`python -m opspilot_api.maintenance.chaos` stops PostgreSQL and Redis in a throwaway Compose project and checks the documented degradation (readiness 503 while liveness stays 200, a database outage answered as a retryable 503, reads continuing and high-risk mutations refused when Redis is down) and automatic recovery. See [docs/chaos-testing.md](docs/chaos-testing.md).
+
 ## Data retention
 
 `python -m opspilot_api.maintenance.retention` purges old observability pipeline data. It is **off by default**: set `RETENTION_SIGNAL_RECEIPT_DAYS` and/or `RETENTION_DEAD_LETTER_DAYS` (0 keeps forever; otherwise at least 7 days, so a provider redelivery is still recognised as a duplicate). It is a dry run unless you pass `--apply`:

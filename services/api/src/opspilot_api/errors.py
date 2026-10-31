@@ -7,6 +7,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from opspilot_api.incidents.service import DomainError
@@ -56,6 +58,22 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         fields = ", ".join(".".join(str(part) for part in err["loc"]) for err in exc.errors())
         return _response(request, 422, "validation_error", f"Invalid request: {fields}")
+
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(InterfaceError)
+    @app.exception_handler(PoolTimeoutError)
+    async def database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+        # PostgreSQL is down, unreachable, or the pool is exhausted: a temporary condition the
+        # client can retry, not a bug. Log the class only; the message can name hosts and users.
+        logger.error("database unavailable", extra={"error_class": type(exc).__name__})
+        response = _response(
+            request,
+            503,
+            "dependency_unavailable",
+            "The service is temporarily unavailable; retry shortly",
+        )
+        response.headers["Retry-After"] = "5"
+        return response
 
     @app.exception_handler(Exception)
     async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
