@@ -2,6 +2,8 @@ import { EncryptJWT, jwtDecrypt } from "jose";
 
 export const SESSION_COOKIE = "opspilot_session";
 export const TX_COOKIE = "opspilot_oidc_tx";
+/** Request header set by the proxy so the root layout can skip the app shell on public auth pages. */
+export const PUBLIC_PAGE_HEADER = "x-opspilot-public-page";
 export const CSRF_HEADER = "x-csrf-token";
 
 export type Session = {

@@ -52,6 +52,18 @@ test.describe("signed-in operator", () => {
     await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   });
 
+  test("public auth pages never render inside the application shell, even while signed in", async ({ page }) => {
+    await signIn(page);
+    for (const path of ["/session-expired", "/login"]) {
+      await page.goto(path);
+      await expect(page.getByRole("navigation", { name: "Primary navigation" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+    }
+    await page.goto("/session-expired");
+    await expect(page.getByRole("heading", { name: "Session expired" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in again" })).toBeVisible();
+  });
+
   test("keeps Sign out reachable and the nav scrollable on a short window", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 600 });
     await signIn(page);

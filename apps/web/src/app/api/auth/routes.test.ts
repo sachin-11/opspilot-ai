@@ -174,7 +174,20 @@ describe("API proxy", () => {
     const response = await proxyGet(new NextRequest(`${ORIGIN}/api/proxy/api/v1/auth/me`), ctx(["api", "v1", "auth", "me"]));
     expect(response.status).toBe(401);
     expect(response.headers.get("x-session-expired")).toBe("1");
+    expect(response.headers.get("set-cookie")).toContain(`${SESSION_COOKIE}=;`);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("drops the session cookie when the API rejects the token, so the browser cannot loop on it", async () => {
+    // The cookie is still valid for the web app, but the API says 401 (for example after the identity
+    // provider rotated its signing keys). Keeping the cookie would keep every page failing.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({error: {code: "invalid_token", message: "x"}}), {status: 401})));
+    const cookie = await cookieFor();
+    const response = await proxyGet(new NextRequest(`${ORIGIN}/api/proxy/api/v1/auth/workspaces`, {headers: {cookie}}), ctx(["api", "v1", "auth", "workspaces"]));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("x-session-expired")).toBe("1");
+    expect(response.headers.get("set-cookie")).toContain(`${SESSION_COOKIE}=;`);
+    expect((await response.json()).error.code).toBe("invalid_token");
   });
 
   it("attaches the bearer token server-side and does not leak it back", async () => {

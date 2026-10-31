@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { OpsProviders } from "@/components/providers";
 import { getAuthConfig } from "@/lib/auth/config";
-import { openSession, SESSION_COOKIE } from "@/lib/auth/security";
+import { openSession, PUBLIC_PAGE_HEADER, SESSION_COOKIE } from "@/lib/auth/security";
 import { getApiBaseUrl } from "@/lib/config";
 
 // Every page depends on the request's session cookie, so nothing is prerendered at build time.
@@ -21,7 +21,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const config = getAuthConfig();
   const jar = await cookies();
   // Pages reached without a valid session are the public auth pages (the proxy redirects the rest).
-  const session = await openSession(jar.get(SESSION_COOKIE)?.value, config.sessionSecret);
+  const publicPage = (await headers()).get(PUBLIC_PAGE_HEADER) === "1";
+  const session = publicPage ? null : await openSession(jar.get(SESSION_COOKIE)?.value, config.sessionSecret);
   return (
     <html lang="en">
       <body>

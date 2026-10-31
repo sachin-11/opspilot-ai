@@ -12,6 +12,21 @@ const FORWARD_RESPONSE =["content-type", "retry-after", "x-request-id", "www-aut
  * Backend-for-frontend proxy: the browser only holds a sealed HttpOnly cookie. The access token is
  * attached server-side, so it never appears in JavaScript, HTML, logs, or URLs.
  */
+/**
+ * The sealed cookie is no longer usable (expired, or the API rejects its token, for example after
+ * the identity provider rotated its keys). Drop it so the browser lands on the public sign-in page
+ * instead of looping through pages that need a working session.
+ */
+function sessionEnded(body: BodyInit | null = null, headers?: Headers) {
+  const response = body
+    ? new NextResponse(body, {status: 401, headers})
+    : NextResponse.json({error: {code: "session_expired", message: "Session expired"}}, {status: 401});
+  response.headers.set("x-session-expired", "1");
+  response.headers.set("Cache-Control", "no-store");
+  response.cookies.delete(SESSION_COOKIE);
+  return response;
+}
+
 async function handle(request: NextRequest, context: {params: Promise<{path: string[]}>}) {
   const config = getAuthConfig();
   const {path} = await context.params;
@@ -26,7 +41,7 @@ async function handle(request: NextRequest, context: {params: Promise<{path: str
     return NextResponse.json({error: {code: "not_found", message: "Not found"}}, {status: 404});
   }
   const session = await openSession(request.cookies.get(SESSION_COOKIE)?.value, config.sessionSecret);
-  if (!session) return NextResponse.json({error: {code: "session_expired", message: "Session expired"}}, {status: 401, headers: {"x-session-expired": "1"}});
+  if (!session) return sessionEnded();
   const mutating = !["GET", "HEAD"].includes(request.method);
   if (mutating && !csrfValid(request.headers.get(CSRF_HEADER), session, request.headers.get("origin"), config.appBaseUrl)) {
     return NextResponse.json({error: {code: "csrf", message: "Invalid CSRF token"}}, {status: 403});
@@ -44,7 +59,7 @@ async function handle(request: NextRequest, context: {params: Promise<{path: str
   if (!upstream) return NextResponse.json({error: {code: "bad_gateway", message: "API unavailable"}}, {status: 502});
   const out = new Headers({"Cache-Control": "no-store"});
   for (const name of FORWARD_RESPONSE) { const value = upstream.headers.get(name); if (value) out.set(name, value); }
-  if (upstream.status === 401) out.set("x-session-expired", "1");
+  if (upstream.status === 401) return sessionEnded(upstream.body, out);
   return new NextResponse(upstream.status === 204 ? null : upstream.body, {status: upstream.status, headers: out});
 }
 
