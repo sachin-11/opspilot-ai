@@ -12,6 +12,12 @@ const schema = z.object({
   OIDC_ISSUER: z.string().optional(),
   OIDC_JWKS_URL: z.string().url().optional(),
   OIDC_SCOPE: z.string().default("openid email profile"),
+  // Optional RP-initiated logout endpoint. Without it, signing out only ends this app's session
+  // and the identity provider may sign the user straight back in.
+  OIDC_END_SESSION_URL: z.string().url().optional(),
+  // Name of the query parameter that carries the post-logout landing page: the OpenID standard
+  // is post_logout_redirect_uri; AWS Cognito uses logout_uri.
+  OIDC_END_SESSION_REDIRECT_PARAM: z.string().regex(/^[a-z_]+$/).default("post_logout_redirect_uri"),
   // Local development provider only; never used in oidc mode.
   AUTH_LOCAL_SIGNING_KEY: z.string().optional(),
 });
@@ -27,6 +33,8 @@ export type AuthConfig = {
   issuer: string | null;
   jwksUrl: string | null;
   scope: string;
+  endSessionUrl: string | null;
+  endSessionRedirectParam: string;
   localSigningKey: string | null;
   secureCookies: boolean;
   redirectUri: string;
@@ -63,6 +71,8 @@ export function getAuthConfig(env: Record<string, string | undefined> = process.
     issuer: value.OIDC_ISSUER ?? null,
     jwksUrl: value.OIDC_JWKS_URL ?? null,
     scope: value.OIDC_SCOPE,
+    endSessionUrl: value.OIDC_END_SESSION_URL ?? null,
+    endSessionRedirectParam: value.OIDC_END_SESSION_REDIRECT_PARAM,
     localSigningKey: value.AUTH_LOCAL_SIGNING_KEY ?? null,
     secureCookies: secure,
     redirectUri: `${base.origin}/api/auth/callback`,

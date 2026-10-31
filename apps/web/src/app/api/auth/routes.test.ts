@@ -129,6 +129,41 @@ describe("session and logout", () => {
     const ok = await logout(new NextRequest(`${ORIGIN}/api/auth/logout`, {method: "POST", headers: {cookie, origin: ORIGIN, "x-csrf-token": "csrf-1"}}));
     expect(ok.status).toBe(200);
     expect(ok.headers.get("set-cookie")).toContain(`${SESSION_COOKIE}=;`);
+    expect((await ok.json()).redirectTo).toBeNull(); // local mode and no end-session endpoint
+  });
+
+  it("sends the browser to the identity provider to end its session, without any token in the URL", async () => {
+    vi.stubEnv("AUTH_MODE", "oidc");
+    vi.stubEnv("OIDC_ISSUER", "http://localhost:8180/realms/opspilot");
+    vi.stubEnv("OIDC_JWKS_URL", "http://keycloak:8080/realms/opspilot/protocol/openid-connect/certs");
+    vi.stubEnv("OIDC_AUTHORIZATION_URL", "http://localhost:8180/realms/opspilot/protocol/openid-connect/auth");
+    vi.stubEnv("OIDC_TOKEN_URL", "http://keycloak:8080/realms/opspilot/protocol/openid-connect/token");
+    vi.stubEnv("OIDC_END_SESSION_URL", "http://localhost:8180/realms/opspilot/protocol/openid-connect/logout");
+    const cookie = await cookieFor();
+    const ok = await logout(new NextRequest(`${ORIGIN}/api/auth/logout`, {method: "POST", headers: {cookie, origin: ORIGIN, "x-csrf-token": "csrf-1"}}));
+    const {redirectTo} = await ok.json();
+    const url = new URL(redirectTo);
+    expect(`${url.origin}${url.pathname}`).toBe("http://localhost:8180/realms/opspilot/protocol/openid-connect/logout");
+    expect(url.searchParams.get("client_id")).toBe("opspilot-web");
+    expect(url.searchParams.get("post_logout_redirect_uri")).toBe(`${ORIGIN}/login`);
+    expect(redirectTo).not.toContain("SECRET-ACCESS-TOKEN");
+    expect(url.searchParams.has("id_token_hint")).toBe(false);
+    expect(ok.headers.get("set-cookie")).toContain(`${SESSION_COOKIE}=;`);
+  });
+
+  it("uses the parameter name the provider expects (Cognito calls it logout_uri)", async () => {
+    vi.stubEnv("AUTH_MODE", "oidc");
+    vi.stubEnv("OIDC_ISSUER", "https://cognito-idp.example/pool");
+    vi.stubEnv("OIDC_JWKS_URL", "https://cognito-idp.example/pool/.well-known/jwks.json");
+    vi.stubEnv("OIDC_AUTHORIZATION_URL", "https://auth.example/oauth2/authorize");
+    vi.stubEnv("OIDC_TOKEN_URL", "https://auth.example/oauth2/token");
+    vi.stubEnv("OIDC_END_SESSION_URL", "https://auth.example/logout");
+    vi.stubEnv("OIDC_END_SESSION_REDIRECT_PARAM", "logout_uri");
+    const cookie = await cookieFor();
+    const ok = await logout(new NextRequest(`${ORIGIN}/api/auth/logout`, {method: "POST", headers: {cookie, origin: ORIGIN, "x-csrf-token": "csrf-1"}}));
+    const url = new URL((await ok.json()).redirectTo);
+    expect(url.searchParams.get("logout_uri")).toBe(`${ORIGIN}/login`);
+    expect(url.searchParams.has("post_logout_redirect_uri")).toBe(false);
   });
 });
 

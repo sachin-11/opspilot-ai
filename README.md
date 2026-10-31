@@ -436,9 +436,14 @@ OIDC_AUTHORIZATION_URL=http://localhost:8180/realms/opspilot/protocol/openid-con
 OIDC_TOKEN_URL=http://keycloak:8080/realms/opspilot/protocol/openid-connect/token
 OIDC_ISSUER=http://localhost:8180/realms/opspilot
 OIDC_JWKS_URL=http://keycloak:8080/realms/opspilot/protocol/openid-connect/certs
+OIDC_END_SESSION_URL=http://localhost:8180/realms/opspilot/protocol/openid-connect/logout
 ```
 
 The browser-facing URLs use `localhost`; the server-to-server URLs (token, JWKS) use the Compose service name `keycloak`. A new user has no workspace until they create one (they become its Owner) or accept an invitation sent to their verified email. `AUTH_OIDC_JWKS_URL` is only needed for providers that do not serve `<issuer>/.well-known/jwks.json` (Keycloak, Auth0, Okta); Cognito does not need it. Outside development both the issuer and the JWKS URL must be https. Keycloak here is a development convenience: production should use a managed provider (Cognito, Auth0, Okta, Entra ID) or a hardened, persistent Keycloak deployment.
+
+### Signing out of the identity provider too
+
+Clearing the app's own session cookie is not enough: the identity provider keeps its own login session and would sign the user straight back in without asking for credentials. Set `OIDC_END_SESSION_URL` (the browser-facing logout endpoint; Keycloak: `<issuer>/protocol/openid-connect/logout`) and **Sign out** also sends the browser there. The redirect carries only `client_id` and the landing page (`post_logout_redirect_uri`, or `logout_uri` for Cognito via `OIDC_END_SESSION_REDIRECT_PARAM`); no token is placed in the URL, so Keycloak shows its own "Do you want to log out?" confirmation before returning to the login page. The landing page must be a registered logout URL (the development realm allows `http://localhost:3300/*`). Without the setting, sign-out ends only the app session. The `.env.example` and the Keycloak steps above already include it; the Playwright suite asserts that the next sign-in asks for credentials.
 
 ### Local-auth mode
 

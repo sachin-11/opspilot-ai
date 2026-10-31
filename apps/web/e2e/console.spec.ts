@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { signIn } from "./helpers";
+import { E2E_EMAIL, E2E_PASSWORD, signIn, signOut } from "./helpers";
 
 test.describe("unauthenticated visitors", () => {
   test("are sent to the login page and cannot reach the API through the proxy", async ({ page, request }) => {
@@ -34,18 +34,30 @@ test.describe("signed-in operator", () => {
     await page.goto("/incidents");
     await expect(page.getByText(title)).toBeVisible();
 
-    await page.getByRole("button", { name: "Sign out" }).click();
-    await expect(page).toHaveURL(/\/login/);
+    await signOut(page);
     await page.goto("/incidents");
     await expect(page).toHaveURL(/\/login/);
+  });
+
+  test("signing out also ends the identity provider session, so the next sign-in asks for credentials", async ({ page }) => {
+    await signIn(page);
+    await signOut(page);
+    await page.getByRole("link", { name: "Sign in with SSO" }).click();
+    // Without the identity provider logout, Keycloak would sign the user straight back in.
+    await expect(page.locator("#username")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+    await page.locator("#username").fill(E2E_EMAIL);
+    await page.locator("#password").fill(E2E_PASSWORD);
+    await page.locator("#kc-login").click();
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
   });
 
   test("keeps Sign out reachable and the nav scrollable on a short window", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 600 });
     await signIn(page);
-    const signOut = page.getByRole("button", { name: "Sign out" });
-    await expect(signOut).toBeVisible();
-    const box = await signOut.boundingBox();
+    const signOutButton = page.getByRole("button", { name: "Sign out" });
+    await expect(signOutButton).toBeVisible();
+    const box = await signOutButton.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y + box!.height).toBeLessThanOrEqual(600);
 
@@ -53,7 +65,7 @@ test.describe("signed-in operator", () => {
     const scrollable = await nav.evaluate((element) => element.scrollHeight > element.clientHeight);
     expect(scrollable).toBe(true);
     await nav.evaluate((element) => element.scrollTo(0, element.scrollHeight));
-    await expect(signOut).toBeVisible();
+    await expect(signOutButton).toBeVisible();
   });
 
   test("does not overflow horizontally on a phone-sized screen", async ({ page }) => {

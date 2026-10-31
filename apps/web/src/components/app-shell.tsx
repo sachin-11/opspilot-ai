@@ -18,9 +18,11 @@ export function AppShell({children}: {children: React.ReactNode}) {
   async function logout() {
     setSigningOut(true);
     const session = await fetch("/api/auth/session", {credentials: "same-origin"}).then((response) => response.ok ? response.json() as Promise<{csrfToken: string}> : null).catch(() => null);
-    await fetch("/api/auth/logout", {method: "POST", credentials: "same-origin", headers: session ? {"X-CSRF-Token": session.csrfToken} : {}});
+    const result = await fetch("/api/auth/logout", {method: "POST", credentials: "same-origin", headers: session ? {"X-CSRF-Token": session.csrfToken} : {}})
+      .then((response) => response.ok ? response.json() as Promise<{redirectTo?: string | null}> : null).catch(() => null);
     setCsrfToken(null);
-    window.location.href = "/login";
+    // Ending the identity provider session too is what makes the next sign-in ask for credentials.
+    window.location.href = result?.redirectTo || "/login";
   }
   // Role-aware navigation is a convenience; routes are enforced server-side regardless.
   const visible = links.filter(([href]) => can(ops, NAV_PERMISSIONS[href] ?? "workspace.read"));

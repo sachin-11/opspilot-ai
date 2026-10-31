@@ -4,6 +4,18 @@ import { expect, type Page } from "@playwright/test";
 export const E2E_EMAIL = process.env.E2E_USER_EMAIL ?? "e2e@example.com";
 export const E2E_PASSWORD = process.env.E2E_USER_PASSWORD ?? "e2e-local-password";
 
+/**
+ * Signs out. The app ends its own session and sends the browser to Keycloak, which asks for a
+ * confirmation before ending its session and returning to the login page.
+ */
+export async function signOut(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.waitForURL(/\/login|openid-connect\/logout/);
+  const confirm = page.locator("#kc-logout");
+  if (await confirm.isVisible()) await confirm.click();
+  await expect(page).toHaveURL(/localhost:3300\/login/);
+}
+
 /** Signs in through the real OIDC flow and makes sure the account has a workspace to work in. */
 export async function signIn(page: Page): Promise<void> {
   await page.goto("/");
