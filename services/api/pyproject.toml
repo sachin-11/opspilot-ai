@@ -77,6 +77,12 @@ plugins = ["pydantic.mypy"]
 module = ["rq.*", "boto3.*", "botocore.*", "confluent_kafka.*"]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+source = ["opspilot_api"]
+
+[tool.coverage.report]
+skip_empty = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers -m 'not integration'"

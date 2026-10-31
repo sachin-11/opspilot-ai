@@ -106,7 +106,9 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run mypy
-      - run: uv run pytest
+      # Coverage floor for the unit suite (60% when it was set); the integration steps below add
+      # more but are not counted. Raise the floor as coverage grows, never lower it to pass.
+      - run: uv run pytest --cov=opspilot_api --cov-report=term --cov-fail-under=58
       - name: Start Kafka-compatible broker (Redpanda)
         run: |
           docker run -d --name broker -p 127.0.0.1:19092:19092 \
