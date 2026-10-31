@@ -245,6 +245,90 @@ export type SourceCreate = {name: string; provider: SourceProvider; service_id: 
 export type SourceUpdate = {name?: string; status?: "active" | "disabled"; environment?: Environment; region?: string | null; configuration?: Record<string, unknown>};
 export type DemoGenerateRequest = {source_id?: string; count: number; duplicate_percent: number; invalid_percent: number};
 
+export const remediationStatusSchema = z.enum(["drafting", "policy_check", "policy_blocked", "sandbox_queued", "sandbox_running", "verification_failed", "awaiting_approval", "approved", "publishing", "pull_request_created", "rejected", "stale", "failed", "cancelled"]);
+export const riskLevelSchema = z.enum(["low", "medium", "high", "prohibited"]);
+export const policyDecisionSchema = z.enum(["allowed", "allowed_with_warnings", "blocked"]);
+export const approvalActionSchema = z.enum(["approved", "rejected", "revision_requested"]);
+export const remediationSummarySchema = z.object({
+  id: z.string().uuid(), workspace_id: z.string().uuid(), incident_id: z.string().uuid(), investigation_id: z.string().uuid(),
+  repository_id: z.string().uuid(), retry_of_id: z.string().uuid().nullable(), base_commit_sha: z.string(), status: remediationStatusSchema,
+  title: z.string(), risk_level: riskLevelSchema, files_changed: z.number(), lines_added: z.number(), lines_deleted: z.number(),
+  patch_hash: z.string().nullable(), policy_version: z.string().nullable(), policy_decision: policyDecisionSchema.nullable(),
+  verification_state: z.string().nullable(), revision_count: z.number(), version: z.number(), created_at: z.string(), updated_at: z.string(),
+  completed_at: z.string().nullable(), failed_at: z.string().nullable(), failure_code: z.string().nullable(), failure_message: z.string().nullable(),
+  stale_reason: z.string().nullable(),
+});
+const policyIssueSchema = z.object({code: z.string(), message: z.string(), path: z.string().optional(), line: z.number().optional()});
+export const verificationCheckSchema = z.object({
+  id: z.string().uuid(), sandbox_run_id: z.string().uuid(), check_type: z.string(), command_id: z.string(), display_name: z.string(), status: z.string(),
+  exit_code: z.number().nullable(), duration_ms: z.number(), stdout_excerpt: z.string().nullable(), stderr_excerpt: z.string().nullable(),
+  output_truncated: z.boolean(), failing_tests: z.array(z.unknown()),
+});
+export const sandboxRunSchema = z.object({
+  id: z.string().uuid(), revision_id: z.string().uuid(), run_kind: z.string(), status: z.string(), sandbox_provider: z.string(),
+  base_commit_sha: z.string(), patch_hash: z.string(), baseline_run_id: z.string().uuid().nullable(), cpu_limit: z.number(),
+  memory_limit_mb: z.number(), disk_limit_mb: z.number(), timeout_seconds: z.number(), network_enabled: z.boolean(),
+  exit_code: z.number().nullable(), output_truncated: z.boolean(), result_hash: z.string().nullable(), cleanup_verified: z.boolean(),
+  started_at: z.string().nullable(), completed_at: z.string().nullable(), failure_code: z.string().nullable(), failure_message: z.string().nullable(),
+  created_at: z.string(), checks: z.array(verificationCheckSchema),
+});
+export const verificationComparisonSchema = z.object({
+  state: z.enum(["passed", "partial", "failed", "not_run"]), required_executed: z.boolean(),
+  new_failures: z.array(z.object({command_id: z.string(), tests: z.array(z.string())})),
+  existing_failures: z.array(z.object({command_id: z.string(), tests: z.array(z.string())})),
+  fixed: z.array(z.string()), skipped: z.array(z.object({command_id: z.string(), reason: z.string()})), notes: z.array(z.string()),
+});
+export const remediationVerificationSchema = z.object({
+  remediation_id: z.string().uuid(), baseline: sandboxRunSchema.nullable(), patched: sandboxRunSchema.nullable(),
+  comparison: verificationComparisonSchema.nullable(), verification_hash: z.string().nullable(),
+});
+export const revisionSchema = z.object({
+  id: z.string().uuid(), revision_number: z.number(), base_commit_sha: z.string(), patch_text: z.string(), patch_hash: z.string(),
+  change_summary: z.string(), files_changed: z.number(), lines_added: z.number(), lines_deleted: z.number(), created_at: z.string(),
+});
+export const approvalRecordSchema = z.object({
+  id: z.string().uuid(), revision_id: z.string().uuid(), action: approvalActionSchema, actor_id: z.string().nullable(), comment: z.string(),
+  approved_patch_hash: z.string(), approved_base_commit_sha: z.string(), approval_context_hash: z.string(),
+  expires_at: z.string().nullable(), created_at: z.string(),
+});
+export const fixPullRequestSchema = z.object({
+  id: z.string().uuid(), remediation_id: z.string().uuid(), revision_id: z.string().uuid(), repository_id: z.string().uuid(),
+  base_commit_sha: z.string(), patch_hash: z.string(), branch_name: z.string(), commit_sha: z.string().nullable(),
+  provider_pull_request_id: z.string().nullable(), pull_request_number: z.number().nullable(), pull_request_url: z.string().nullable(),
+  status: z.enum(["creating", "created", "closed", "failed", "stale"]), failure_code: z.string().nullable(),
+  failure_message: z.string().nullable(), created_at: z.string(), updated_at: z.string(),
+});
+export const remediationDetailSchema = remediationSummarySchema.extend({
+  problem_statement: z.string(), proposed_solution: z.string(), affected_components: z.array(z.unknown()),
+  generator_provider: z.string(), generator_model: z.string(), generator_prompt_version: z.string(),
+  structured_output: z.record(z.string(), z.unknown()), total_input_tokens: z.number(), total_output_tokens: z.number(),
+  estimated_cost_usd: z.number().nullable(), current_revision_id: z.string().uuid().nullable(),
+  repository_full_name: z.string().nullable(), root_cause: z.string().nullable(),
+  evidence: z.array(z.object({id: z.string().uuid(), title: z.string(), excerpt: z.string(), source_type: z.string()})),
+  revisions: z.array(revisionSchema),
+  policy_evaluations: z.array(z.object({
+    id: z.string().uuid(), revision_id: z.string().uuid(), policy_version: z.string(), decision: policyDecisionSchema,
+    risk_level: riskLevelSchema, violations: z.array(policyIssueSchema), warnings: z.array(policyIssueSchema), evaluated_at: z.string(),
+  })),
+  approvals: z.array(approvalRecordSchema),
+  steps: z.array(z.object({id: z.string().uuid(), node_name: z.string(), display_name: z.string(), status: z.string(), attempt: z.number(), summary: z.string().nullable(), error_code: z.string().nullable(), started_at: z.string(), completed_at: z.string().nullable()})),
+  pull_request: fixPullRequestSchema.nullable(),
+  approval_binding: z.object({
+    workspace_id: z.string().uuid(), repository_id: z.string().uuid(), base_commit_sha: z.string(), revision_id: z.string().uuid(),
+    patch_hash: z.string(), policy_version: z.string(), verification_hash: z.string(), expires_in_seconds: z.number(),
+  }).nullable(),
+  write_enabled: z.boolean(),
+  audit_events: z.array(z.object({id: z.string(), action: z.string(), result: z.string(), actor_type: z.string(), actor_id: z.string().nullable(), target_type: z.string(), correlation_id: z.string().nullable(), created_at: z.string()})),
+});
+const remediationQueuedSchema = z.object({remediation_id: z.string().uuid(), status: remediationStatusSchema});
+const remediationActionSchema = z.object({remediation_id: z.string().uuid(), status: remediationStatusSchema, version: z.number()});
+export type RemediationStatus = z.infer<typeof remediationStatusSchema>;
+export type RemediationSummary = z.infer<typeof remediationSummarySchema>;
+export type RemediationDetail = z.infer<typeof remediationDetailSchema>;
+export type RemediationVerification = z.infer<typeof remediationVerificationSchema>;
+export type SandboxRun = z.infer<typeof sandboxRunSchema>;
+export type ApprovalAction = z.infer<typeof approvalActionSchema>;
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
@@ -295,6 +379,14 @@ export const api = {
   status: (baseUrl: string, workspaceId: string, incidentId: string, status: IncidentStatus, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/status`, incidentSchema, {method: "PATCH", body: JSON.stringify({status, version})}),
   severity: (baseUrl: string, workspaceId: string, incidentId: string, severity: Severity, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/severity`, incidentSchema, {method: "PATCH", body: JSON.stringify({severity, version})}),
   note: (baseUrl: string, workspaceId: string, incidentId: string, summary: string, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/notes`, timelineSchema, {method: "POST", body: JSON.stringify({summary, version})}),
+  remediations: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations?${query}`, z.array(remediationSummarySchema)),
+  remediation: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}`, remediationDetailSchema),
+  remediationVerification: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}/verification`, remediationVerificationSchema),
+  startRemediation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}/remediations`, remediationQueuedSchema, {method: "POST"}),
+  cancelRemediation: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}/cancel`, remediationActionSchema, {method: "POST"}),
+  retryRemediation: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}/retry`, remediationQueuedSchema, {method: "POST"}),
+  reviewRemediation: (baseUrl: string, workspaceId: string, remediationId: string, data: {action: ApprovalAction; comment: string; revision_id: string; version: number}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}/review`, remediationActionSchema, {method: "POST", body: JSON.stringify(data)}),
+  publishRemediation: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}/publish`, remediationActionSchema, {method: "POST"}),
   investigations: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/investigations`, z.array(investigationSummarySchema)),
   investigation: (baseUrl: string, workspaceId: string, investigationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/investigations/${investigationId}`, investigationDetailSchema),
   startInvestigation: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/investigations`, z.object({investigation_id: z.string().uuid(), status: z.literal("queued")}), {method: "POST", body: JSON.stringify({trigger: "manual"})}),

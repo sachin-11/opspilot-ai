@@ -1,4 +1,4 @@
-# OpsPilot AI - Architecture (Modules 0-5)
+# OpsPilot AI - Architecture (Modules 0-6)
 
 ## Container view
 
@@ -515,3 +515,131 @@ Nothing is buffered in memory: a signal is either durably accepted (202), reject
 
 ### LangGraph observability tools
 `query_service_logs`, `get_service_metrics`, `compare_metric_windows`, and `get_alarm_context` are read-only and bounded. Workspace, incident, service, and source scope comes from the trusted investigation context; results are redacted, size-limited, audited without result contents, and returned as `observability_log`, `observability_metric`, `observability_alarm`, and `normalized_signal` evidence with stable citation labels. Provider failures produce explicit unavailable observations, and investigations without a source are unchanged. Returned text is untrusted evidence and shows correlation, not proven causation.
+
+## Module 6 remediation architecture
+
+Module 6 adds one controlled write path: **fix branch, one commit, and a pull request, only after explicit human approval of an exact artifact.** Everything between a model suggestion and that write is deterministic code.
+
+### New infrastructure justification
+
+The only addition is a **sandbox execution requirement**: running a repository's tests is untrusted-code execution, which needs OS-level isolation. It is met with ephemeral Docker containers (no new long-running service) and a **separate RQ queue (`remediation`)** served by a dedicated worker that has Docker Engine access. The general Compose `worker` keeps no Docker access and never serves that queue, so the Docker socket is never mounted into a container that also holds application secrets. No new database, broker, or microservice is introduced; PostgreSQL, Redis/RQ, and LangGraph checkpoints are reused.
+
+### Remediation LangGraph
+
+`remediation/workflow.py` compiles a separate graph (PostgreSQL checkpoints, thread per run). Nodes delegate to idempotent `RemediationPipeline` steps that first check the expected lifecycle status, so RQ retries and checkpoint resumes never duplicate revisions, sandbox runs, or events.
+
+```
+load_context -> select_repository -> select_code_context -> generate_patch (draft plan, structured patch,
+validate syntax/scope, <=2 repairs) -> policy_check -> prepare_sandbox -> baseline_checks -> patched_checks
+(apply patch, same checks) -> compare_results -> verification_report -> await_approval (interrupt)
+```
+
+`reverify` is an alternate entry (at `policy_check`) used after an approval is invalidated. Publication (`publish`) is a separate RQ job so it can re-validate the approval binding at the moment of writing. Persisted: concise step summaries, selected evidence IDs, revisions, policy results, verification rows, approvals. Chain-of-thought is never requested or stored.
+
+```mermaid
+flowchart LR
+    A[Approved investigation + evidence] --> B[Select repository + immutable base commit]
+    B --> C[Bounded redacted code context]
+    C --> D[Generator: structured patch or abstain]
+    D --> E{Structure valid?<br/>citations, repo, base, command IDs, diff}
+    E -- no, max 2 repairs --> D
+    E -- yes --> F[Immutable revision]
+    F --> G[Deterministic policy engine]
+    G -- blocked --> X[policy_blocked]
+    G -- allowed --> H[Docker sandbox: baseline checks]
+    H --> I[Apply patch + same checks]
+    I --> J[Compare baseline vs patched]
+    J -- new failure / nothing ran --> Y[verification_failed]
+    J -- passed or partial --> K[awaiting_approval]
+```
+
+### Policy boundary and sandbox isolation
+
+```mermaid
+flowchart TB
+    subgraph Untrusted["Untrusted: model output + repository code"]
+        M[LLM / fake generator]
+        R[Repository files and tests]
+    end
+    subgraph Trusted["Trusted deterministic code"]
+        V[Structure validation]
+        P[Policy engine v2026-10.1]
+        REG[Command registry: argv only]
+        AP[Strict diff applier]
+    end
+    subgraph Sandbox["Ephemeral container"]
+        S["non-root, read-only root, tmpfs<br/>--network none, cap-drop ALL, no-new-privileges<br/>CPU / memory / PID / timeout / output limits<br/>no socket, no host mounts, sanitized env"]
+    end
+    M --> V --> P --> AP
+    REG --> S
+    AP --> S
+    R --> S
+    S -->|bounded, redacted results| DB[(PostgreSQL)]
+    P -. cannot be overridden by .- M
+```
+
+The model can only select registered command IDs. Docker flags, environment, mounts, and limits are built server-side. A checkout is read through the read-only provider (no `git clone`, no credentials in remotes), skips symlinks and submodules, and is hash-verified.
+
+### Baseline versus patched verification
+
+Both runs use fresh sandboxes. The baseline run records pre-existing failures per check (opaque failing-test identifiers; a normalized output signature for non-test commands). The patched run applies the patch, then reruns the same registered commands plus targeted tests for added test files. `compare_runs` attributes failures: `new = patched − baseline` blocks approval; failures present in both are reported as existing; skipped or unexecuted checks yield `partial`/`not_run`, never `passed`. A SHA-256 over check outcomes (no timing/output) is the **verification hash**.
+
+### Human approval interruption and resume
+
+`await_approval` calls `interrupt()`. `POST /review` validates `version`, `revision_id`, policy decision and version, verification state, and that the default branch still equals the base commit (a provider outage fails closed), then writes an append-only approval row and moves the remediation with a compare-and-set update. The review job resumes the graph only to finish or loop (`revision_requested` returns to `generate_patch` with the reviewer's feedback, bounded by `REMEDIATION_MAX_REVISIONS`).
+
+### Approval artifact binding
+
+```mermaid
+sequenceDiagram
+    participant H as Human reviewer
+    participant API as API (review)
+    participant DB as PostgreSQL
+    participant Q as RQ (remediation queue)
+    participant W as Sandbox-capable worker
+    participant GH as GitHub write provider
+    H->>API: review {action, comment, revision_id, version}
+    API->>API: check status, version, revision, policy, verification, base head
+    API->>DB: append approval (context + SHA-256, expires_at); status approved
+    H->>API: publish
+    API->>API: recompute binding; write enabled?
+    API->>DB: status publishing
+    API->>Q: publish job
+    Q->>W: run
+    W->>W: re-derive workspace, repo, base, revision, patch hash, policy version, verification hash, expiry
+    alt anything differs or expired
+        W->>DB: audit approval_invalidated; status policy_check or stale
+        W-->>H: nothing published
+    else exact match
+        W->>GH: verify write access; create branch; one commit; open PR (idempotent)
+        W->>DB: pull_request_created
+    end
+```
+
+One approval backs at most one publication row (`UNIQUE(approval_id)`); concurrent or repeated jobs converge on the same branch (`opspilot/fix-<remediation>-<patch hash>`), commit, and PR.
+
+### GitHub branch, commit, and pull-request publication
+
+The write interface exposes only: verify permissions, get branch head, create branch, create one commit, find/open PR, read PR status. Provider-level guards reject any branch that is the default branch or lacks the `opspilot/fix-` prefix. The GitHub implementation uses GET/POST/PATCH on refs, git objects, and pulls with a short-lived token limited to `contents:write`, `pull_requests:write`, `metadata:read`; the fix-branch ref is fast-forwarded with `force: false`. PR bodies contain incident/investigation references, root cause, evidence IDs, exact base commit, patch summary, risk, policy decision, verification outcomes, limitations, and an explicit statement that OpsPilot does not auto-merge; no logs, secrets, or reasoning.
+
+### Stale base handling
+
+```mermaid
+stateDiagram-v2
+    [*] --> awaiting_approval
+    awaiting_approval --> approved: review (base == head)
+    awaiting_approval --> stale: default branch advanced
+    approved --> publishing: publish (binding exact)
+    approved --> policy_check: patch / policy / verification changed or approval expired
+    publishing --> stale: base advanced before write
+    publishing --> policy_check: binding mismatch
+    policy_check --> awaiting_approval: re-verification passes (new approval required)
+    stale --> [*]: regenerate against new base (retry)
+```
+
+The base is checked at generation (snapshot must equal the head), at sandbox preparation, at approval, and immediately before branch creation. A stale remediation voids its approval and is never rebased: a new remediation is generated from a re-synced snapshot.
+
+### Audit trail
+
+`remediation_audit_events` is append-only (trigger-enforced) and records actor type/id (null until Module 7), workspace, target, action, result, correlation ID, and scrubbed identifiers/counts for: request, patch generation/abstention, policy decision, sandbox start/stop (with cleanup verification), verification result, approval/rejection/revision request, approval invalidation, publication attempts, GitHub branch/commit/PR creation, failure, and cancellation. Real-time `remediation.*` events carry identifiers and statuses only.
+

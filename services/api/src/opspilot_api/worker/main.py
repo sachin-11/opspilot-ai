@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import socket
 from types import TracebackType
 
@@ -15,12 +16,20 @@ from opspilot_api.infrastructure import create_db_engine, create_session_factory
 from opspilot_api.investigations.service import recover_stale_investigations
 from opspilot_api.knowledge.service import recover_stale_jobs
 from opspilot_api.logging_config import configure_logging
+from opspilot_api.remediation.service import recover_stale_remediations
 from opspilot_api.repositories.service import recover_stale_repository_work
 
 logger = logging.getLogger("opspilot_api.worker")
 
-QUEUES = ["default"]
+DEFAULT_QUEUES = "default"
 WORKER_TTL_SECONDS = 60
+
+
+def queue_names() -> list[str]:
+    """Queues this worker serves. Only a sandbox-capable worker should serve ``remediation``."""
+    raw = os.environ.get("WORKER_QUEUES", DEFAULT_QUEUES)
+    names = [item.strip() for item in raw.split(",") if item.strip()]
+    return names or [DEFAULT_QUEUES]
 
 
 def worker_name() -> str:
@@ -58,6 +67,8 @@ async def recover_stale_work(settings: Settings) -> tuple[int, int, int]:
             investigations = await recover_stale_investigations(session, settings)
             ingestion_jobs = await recover_stale_jobs(session, settings)
             repository_work = await recover_stale_repository_work(session, settings)
+            if "remediation" in queue_names():
+                repository_work += await recover_stale_remediations(session, settings)
             return investigations, ingestion_jobs, repository_work
     finally:
         await engine.dispose()
@@ -95,13 +106,13 @@ def main() -> None:
             )
     connection = create_redis(settings)
     worker = Worker(
-        QUEUES,
+        queue_names(),
         name=worker_name(),
         connection=connection,
         worker_ttl=WORKER_TTL_SECONDS,
         exception_handlers=[log_job_failure],
     )
-    logger.info("worker starting", extra={"queues": QUEUES, "worker": worker.name})
+    logger.info("worker starting", extra={"queues": queue_names(), "worker": worker.name})
     try:
         # The scheduler releases rate-limited repository jobs at their provider reset time.
         worker.work(with_scheduler=True)
