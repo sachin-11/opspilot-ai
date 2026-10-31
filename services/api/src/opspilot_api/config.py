@@ -231,6 +231,9 @@ class Settings(BaseSettings):
     AUTH_INVITATION_TTL_HOURS: int = Field(default=72, ge=1, le=720)
     AUTH_WS_TICKET_TTL_SECONDS: int = Field(default=30, ge=5, le=120)
     AUTH_WS_MAX_CONNECTIONS_PER_USER: int = Field(default=5, ge=1, le=50)
+    # A socket is closed (4401) after this long even if the membership is still active, so the
+    # client must reconnect with a fresh ticket, which requires a still-valid web session.
+    AUTH_WS_MAX_LIFETIME_SECONDS: int = Field(default=3600, ge=1, le=86_400)
     AUTH_API_KEY_MAX_ACTIVE: int = Field(default=25, ge=1, le=500)
     AUTH_API_KEY_MAX_TTL_DAYS: int = Field(default=365, ge=1, le=3650)
     AUTH_API_KEY_TOUCH_SECONDS: int = Field(default=300, ge=10, le=86_400)

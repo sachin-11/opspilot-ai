@@ -315,6 +315,8 @@ async def serve_socket(websocket: WebSocket, workspace_id: UUID, user_id: UUID) 
     pubsub = redis.pubsub()
     channel = f"opspilot:workspace:{workspace_id}:incidents"
     last_check = time.monotonic()
+    connected_at = time.monotonic()
+    max_lifetime = websocket.app.state.settings.AUTH_WS_MAX_LIFETIME_SECONDS
     window_start = time.monotonic()
     received = 0
     try:
@@ -335,6 +337,11 @@ async def serve_socket(websocket: WebSocket, workspace_id: UUID, user_id: UUID) 
                 if envelope.workspace_id != workspace_id:
                     continue  # never forward another tenant's event
                 await websocket.send_text(envelope.model_dump_json())
+            if time.monotonic() - connected_at > max_lifetime:
+                # Authorization was only proven at connect time and by membership rechecks, not by
+                # the session. Forcing a reconnect re-proves a live session via a fresh ticket.
+                await websocket.close(code=4401)
+                return
             if time.monotonic() - last_check > MEMBERSHIP_RECHECK_SECONDS:
                 last_check = time.monotonic()
                 async with websocket.app.state.session_factory() as session:

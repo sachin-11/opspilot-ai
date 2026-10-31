@@ -9,10 +9,11 @@ import os
 import time
 from collections.abc import Callable, Iterator
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from redis import Redis
@@ -933,6 +934,35 @@ def test_websocket_ticket_expires(clients: Clients, session: Session, settings: 
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(ws_url(workspace, ticket)):
             pass
+
+
+def test_websocket_is_closed_after_its_maximum_lifetime(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cast(FastAPI, client.app).state.settings, "AUTH_WS_MAX_LIFETIME_SECONDS", 1)
+    workspace = make_workspace(session)
+    user = new_subject()
+    add_member(session, workspace, user, "viewer")
+    with client.websocket_connect(ws_url(workspace, ticket_for(client, user, workspace))) as socket:
+        assert socket.receive_json()["type"] == "connection.established"
+        deadline = time.time() + 10
+        closed: int | None = None
+        while time.time() < deadline:
+            try:
+                socket.receive_text()
+            except WebSocketDisconnect as exc:
+                closed = exc.code
+                break
+        assert closed == 4401  # still a member: only the lifetime cap ended the connection
+    # A new ticket is still granted, so a live session simply reconnects.
+    assert (
+        client.post(
+            "/api/v1/auth/ws-ticket",
+            headers=headers(user),
+            json={"workspace_id": str(workspace.id)},
+        ).status_code
+        == 200
+    )
 
 
 def test_websocket_stops_after_membership_revocation(
