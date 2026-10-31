@@ -520,6 +520,10 @@ sum(rate(opspilot_http_requests_total{status=~"5.."}[5m])) / sum(rate(opspilot_h
 histogram_quantile(0.95, sum by (le, route) (rate(opspilot_http_request_duration_seconds_bucket[5m])))
 ```
 
+## Backup and restore
+
+`scripts/backup.ps1` writes a checksummed `pg_dump` archive and verifies it can be listed; `scripts/restore.ps1 -Verify` runs a restore drill in a temporary database and drops it, and `-ReplaceLive -ConfirmDatabaseName <db>` performs a guarded recovery. The restore script refuses a corrupt archive, refuses without the exact database name, and refuses while sessions are still connected. See [docs/runbook-backup-restore.md](docs/runbook-backup-restore.md) for what is and is not covered (uploaded knowledge files need their own archive; a restored database also needs `OBS_SECRET_ENCRYPTION_KEY` and `AUTH_AUDIT_KEY`), targets, scheduling, and the disaster-recovery steps.
+
 ## Database connection pool
 
 The API holds a bounded PostgreSQL pool per process: `DB_POOL_SIZE` (default 10) plus `DB_MAX_OVERFLOW` (default 10) connections, a `DB_POOL_TIMEOUT_SECONDS` (default 10) wait for a free connection before the request fails instead of queueing, `DB_POOL_RECYCLE_SECONDS` (default 1800) so long-lived connections are replaced before a proxy drops them, and a server-side `DB_STATEMENT_TIMEOUT_SECONDS` (default 60) that cancels a runaway statement. Size the pool against PostgreSQL `max_connections` across **every** process that connects (each API replica, the worker, the pipeline consumers, and migrations): `replicas x (DB_POOL_SIZE + DB_MAX_OVERFLOW)` plus the other processes must stay below it. The synchronous engines used by the investigation workflow and CLI tools are separate and are not governed by these settings.

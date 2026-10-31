@@ -38,3 +38,5 @@ services/api/benchmark-results/
 
 # LLMOps evaluation reports (generated)
 evaluation-reports/
+# Database backups (contain customer data)
+backups/

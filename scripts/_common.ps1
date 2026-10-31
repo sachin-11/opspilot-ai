@@ -25,3 +25,12 @@ function Invoke-Step {
 function Invoke-Pnpm {
     corepack pnpm @args
 }
+
+# The postgres container of the compose project, unless a container name or ID is given.
+function Resolve-PostgresContainer {
+    param([string]$Name = '')
+    if ($Name) { return $Name }
+    $id = docker compose ps -q postgres | Select-Object -First 1
+    if (-not $id) { throw 'The compose postgres service is not running (docker compose up -d postgres); or pass -Container.' }
+    return $id.Trim()
+}
