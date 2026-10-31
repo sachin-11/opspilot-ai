@@ -296,6 +296,8 @@ EXPECTED[Role.RESPONDER] = EXPECTED[Role.ANALYST] | {
     "remediations.review",
     "services.manage",
     "investigations.review",
+    "llmops.read",
+    "llmops.evals.label",
 }
 EXPECTED[Role.ADMIN] = EXPECTED[Role.RESPONDER] | {
     "workspace.manage",
@@ -307,6 +309,10 @@ EXPECTED[Role.ADMIN] = EXPECTED[Role.RESPONDER] | {
     "remediations.publish",
     "api_keys.manage",
     "audit.read",
+    "llmops.prompts.manage",
+    "llmops.evals.run",
+    "llmops.experiments.manage",
+    "llmops.budgets.manage",
 }
 EXPECTED[Role.OWNER] = {p.value for p in Permission}
 

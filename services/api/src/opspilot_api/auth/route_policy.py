@@ -168,6 +168,48 @@ _RULES = [
         rate="approval_attempt",
         audit="remediation.publish",
     ),
+    # LLMOps (prompts, evaluations, experiments, usage, budgets). All human-only: no API scopes.
+    _p(READ, WS + r"/llmops/.*", P.LLMOPS_READ),
+    _p(
+        frozenset({"POST"}),
+        WS + r"/llmops/prompts/\{prompt_id\}/(versions|publish|rollback)",
+        P.LLMOPS_PROMPTS_MANAGE,
+        rate="approval_attempt",
+        audit="prompt.change",
+    ),
+    _p(
+        frozenset({"POST"}),
+        WS + r"/llmops/eval-runs(/\{eval_run_id\}/cancel)?",
+        P.LLMOPS_EVALS_RUN,
+        rate="remediation_create",
+        audit="eval.run",
+    ),
+    _p(
+        frozenset({"POST"}),
+        WS + r"/llmops/eval-results/\{result_id\}/human-label",
+        P.LLMOPS_EVALS_LABEL,
+        audit="eval.label",
+    ),
+    _p(
+        frozenset({"POST"}),
+        WS + r"/llmops/experiments",
+        P.LLMOPS_EXPERIMENTS_MANAGE,
+        audit="experiment.create",
+    ),
+    _p(
+        frozenset({"POST"}),
+        WS + r"/llmops/experiments/\{experiment_id\}/(start|pause|stop)",
+        P.LLMOPS_EXPERIMENTS_MANAGE,
+        rate="approval_attempt",
+        audit="experiment.change",
+    ),
+    _p(
+        frozenset({"PATCH"}),
+        WS + r"/llmops/budgets/\{budget_id\}",
+        P.LLMOPS_BUDGETS_MANAGE,
+        rate="approval_attempt",
+        audit="budget.change",
+    ),
     # Knowledge
     _p(
         frozenset({"POST"}),

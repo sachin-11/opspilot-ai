@@ -218,3 +218,37 @@ dl { display: grid; grid-template-columns: 120px 1fr; gap: 10px; } dt { color: v
 .link-button { background: none; border: 0; padding: 0; color: var(--color-accent); text-decoration: underline; cursor: pointer; }
 fieldset { border: 1px solid var(--color-line); padding: 10px 14px; display: grid; gap: 6px; }
 @media (max-width: 640px) { .table-wrap td, .table-wrap th { white-space: normal; padding: 10px 8px; } .auth-card { padding: 16px; } }
+
+/* Module 8: LLMOps */
+.llmops-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.llmops-tabs a { min-height: 40px; display: inline-flex; align-items: center; padding: 0 14px; border: 1px solid var(--color-line); border-radius: 4px; color: var(--color-muted); }
+.llmops-tabs a:hover, .llmops-tabs a[aria-current="page"] { color: var(--color-ink); border-color: var(--color-accent); }
+.llmops-grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.metric-source { grid-column: 1 / -1; margin: 0; }
+.synthetic-tag { text-transform: none; white-space: normal; }
+.wrap-cell { white-space: normal; min-width: 220px; overflow-wrap: anywhere; }
+.compact th, .compact td { padding: 6px 10px; }
+.bar-list { margin: 0; } .bar-list figcaption, .trend-chart figcaption { color: var(--color-muted); font: .75rem var(--font-mono); text-transform: uppercase; margin-bottom: 8px; }
+.bar-row { display: grid; grid-template-columns: minmax(90px, 220px) minmax(0, 1fr) minmax(70px, auto); gap: 12px; align-items: center; }
+.bar-label { overflow-wrap: anywhere; } .bar-value { text-align: right; font-family: var(--font-mono); }
+.bar-track { height: 10px; background: var(--color-canvas); border: 1px solid var(--color-line); } .bar-fill { display: block; height: 100%; background: var(--color-accent); }
+.trend-chart { margin: 0; } .trend-chart svg { width: 100%; height: auto; max-height: 260px; }
+.trend-grid { stroke: var(--color-line); stroke-dasharray: 3 3; } .trend-axis { fill: var(--color-muted); font: 10px var(--font-mono); }
+.trend-line { stroke: var(--color-accent); stroke-width: 2; } .trend-dot { fill: var(--color-accent); stroke: var(--color-canvas); stroke-width: 2; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .6); }
+.dialog { max-width: 560px; width: 100%; max-height: 90vh; overflow-y: auto; border-color: var(--color-accent); }
+.status-badge.breaker-unknown { color: var(--color-ink); border-style: dashed; background: repeating-linear-gradient(45deg, transparent 0 6px, rgb(154 168 174 / .15) 6px 12px); }
+.row-unknown { outline: 1px dashed var(--color-muted); outline-offset: -1px; }
+.budget-bar { display: grid; gap: 8px; padding: 12px 0; } .budget-bar progress { width: 100%; height: 14px; } .budget-bar p { margin: 0; }
+.budget-hard_limit { border-left: 3px solid var(--color-bad); padding-left: 12px; } .budget-soft_warning { border-left: 3px solid var(--color-warn); padding-left: 12px; }
+.budget-form { margin: 6px 0 12px; padding: 14px; border: 1px solid var(--color-line); }
+.text-diff h4 { margin: 18px 0 8px; } .text-diff .diff-table td:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
+.llmops-header .page-header, .llmops-header { align-items: flex-start; }
+.label-form { padding: 14px; border: 1px solid var(--color-line); background: var(--color-canvas); }
+.llmops .button, .llmops select, .llmops input, .llmops textarea { min-height: 40px; }
+.llmops input[type="checkbox"], .llmops input[type="radio"] { min-height: 0; width: 20px; height: 20px; }
+@media (max-width: 820px) {
+  .bar-row { grid-template-columns: minmax(0, 1fr) auto; } .bar-track { grid-column: 1 / -1; grid-row: 2; }
+  .llmops-header, .filters { flex-direction: column; align-items: stretch; }
+  .dialog-backdrop { align-items: end; padding: 0; } .dialog { max-height: 85vh; }
+}

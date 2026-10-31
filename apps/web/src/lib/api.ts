@@ -349,6 +349,108 @@ export type ApiKey = z.infer<typeof apiKeySchema>;
 export type AuditEvent = z.infer<typeof auditEventSchema>;
 export const API_SCOPES = ["events:write", "incidents:read", "knowledge:read", "investigations:read"] as const;
 
+const num = z.number();
+const nullableNum = z.number().nullable();
+export const promptVersionStatusSchema = z.enum(["draft", "candidate", "published", "retired"]);
+export const gateResultSchema = z.object({gate: z.string(), kind: z.enum(["hard", "soft"]), status: z.enum(["pass", "fail", "skipped"]), detail: z.string(), overridden: z.boolean().default(false)});
+export const gateReportSchema = z.object({config_version: z.string(), results: z.array(gateResultSchema)});
+export const promptVersionSchema = z.object({
+  id: z.string().uuid(), semantic_version: z.string(), status: promptVersionStatusSchema, is_default: z.boolean(), change_notes: z.string(),
+  content_hash: z.string(), system_template: z.string(), developer_template: z.string().nullable(), created_by_user_id: z.string().uuid(),
+  published_by_user_id: z.string().uuid().nullable(), override_reason: z.string().nullable(), gate_report: gateReportSchema.nullable(),
+  eval_run_id: z.string().uuid().nullable(), created_at: z.string(), published_at: z.string().nullable(), retired_at: z.string().nullable(),
+});
+export const promptSummarySchema = z.object({
+  id: z.string().uuid(), name: z.string(), workflow: z.string(), node_name: z.string(), description: z.string(),
+  status: z.enum(["active", "deprecated"]), default_version: z.string().nullable(), version_count: z.number(), updated_at: z.string(),
+});
+export const promptDetailSchema = promptSummarySchema.extend({versions: z.array(promptVersionSchema)});
+export const promptActionSchema = z.object({prompt_id: z.string().uuid(), version_id: z.string().uuid(), semantic_version: z.string(), status: z.string(), is_default: z.boolean(), overridden_gates: z.array(z.string()).default([])});
+export const datasetSchema = z.object({
+  id: z.string().uuid(), name: z.string(), workflow: z.string(), description: z.string(), version: z.number(), status: z.enum(["draft", "published", "retired"]),
+  content_hash: z.string(), case_count: z.number(), suite_counts: z.record(z.string(), z.number()), split_counts: z.record(z.string(), z.number()), published_at: z.string().nullable(),
+});
+export const evalVariantSchema = z.enum(["baseline", "candidate", "regressing"]);
+export const evalRunTypeSchema = z.enum(["ci", "offline", "candidate_comparison", "production_sample", "shadow"]);
+export const evalPurposeSchema = z.enum(["development", "tuning", "gate"]);
+export const evalRunSummarySchema = z.object({
+  id: z.string().uuid(), dataset_id: z.string().uuid(), dataset_version: z.number(), run_type: z.string(), purpose: z.string(), variant: z.string(),
+  status: z.enum(["queued", "running", "completed", "failed", "cancelled"]), repeat_count: z.number(), total_cases: z.number(), passed_cases: z.number(),
+  failed_cases: z.number(), total_tokens: z.number(), estimated_cost_usd: nullableNum, metrics_source: z.enum(["synthetic", "measured"]),
+  started_at: z.string().nullable(), completed_at: z.string().nullable(), created_at: z.string(), error: z.string().nullable(),
+});
+export const evalResultSchema = z.object({
+  id: z.string().uuid(), case_key: z.string(), suite: z.string(), variant: z.string(), repeat_index: z.number(), passed: z.boolean(), safety_failed: z.boolean(),
+  failure_reasons: z.array(z.string()), deterministic_scores: z.record(z.string(), z.unknown()), latency_ms: num, tokens: num, estimated_cost_usd: nullableNum, labelled: z.boolean(),
+});
+export const evalComparisonSchema = z.object({
+  control_variant: z.string(), control_metrics: z.record(z.string(), nullableNum), control_violations: z.record(z.string(), z.number()), control_pass_rate_by_suite: z.record(z.string(), z.number()),
+});
+export const evalRunDetailSchema = evalRunSummarySchema.extend({
+  prompt_versions: z.record(z.string(), z.unknown()), routing_policy_version: z.string().nullable(), metrics: z.record(z.string(), nullableNum),
+  violations: z.record(z.string(), z.number()), by_suite: z.record(z.string(), z.number()), by_tag: z.record(z.string(), z.number()), flaky_cases: z.array(z.string()),
+  gate_report: gateReportSchema.nullable(), comparison: evalComparisonSchema.nullable(), failed_results: z.array(evalResultSchema),
+  grader_breakdown: z.record(z.string(), z.number()), label_queue: z.array(evalResultSchema), markdown_report: z.string().nullable(),
+});
+export const evalActionSchema = z.object({eval_run_id: z.string().uuid(), status: z.string()});
+export const humanLabelSchema = z.object({id: z.string().uuid(), result_id: z.string().uuid(), rubric_version: z.string(), passed: z.boolean(), notes: z.string().nullable(), created_at: z.string()});
+export const EXPERIMENT_METRICS = ["pass_rate", "safety_rate", "schema_validity_rate", "citation_validity_rate", "abstention_rate"] as const;
+export const experimentSchema = z.object({
+  id: z.string().uuid(), name: z.string(), workflow: z.string(), status: z.enum(["draft", "running", "paused", "completed", "cancelled"]),
+  control_variant: z.record(z.string(), z.unknown()), candidate_variant: z.record(z.string(), z.unknown()), allocation_percentage: num, unit: z.string(),
+  primary_metric: z.string(), guardrail_metrics: z.array(z.string()), minimum_sample_size: z.number(), stop_reason: z.string().nullable(),
+  started_at: z.string().nullable(), ended_at: z.string().nullable(), created_at: z.string(),
+});
+export const metricComparisonOutSchema = z.object({
+  metric: z.string(), guardrail: z.boolean(), control_rate: num, candidate_rate: num, difference: num, ci_low: num, ci_high: num,
+  p_value: nullableNum, significant: z.boolean(), regressed: z.boolean(), note: z.string(),
+});
+export const experimentAnalysisSchema = z.object({
+  control_n: z.number(), candidate_n: z.number(), minimum_sample_size: z.number(), sample_size_reached: z.boolean(), metrics: z.array(metricComparisonOutSchema),
+  safety_stop: z.boolean(), warnings: z.array(z.string()), promotable_by_data: z.boolean(), promotion_note: z.string(), assumptions: z.array(z.string()),
+});
+export const experimentDetailSchema = experimentSchema.extend({assignment_counts: z.record(z.string(), z.number()), analysis: experimentAnalysisSchema.nullable()});
+export const usageBucketSchema = z.object({key: z.string(), requests: z.number(), input_tokens: z.number(), output_tokens: z.number(), cost_usd: num, cost_unavailable_requests: z.number()});
+export const usageSchema = z.object({
+  group_by: z.string(), since: z.string(), until: z.string(), total_requests: z.number(), total_input_tokens: z.number(), total_output_tokens: z.number(),
+  latency_p50_ms: nullableNum, latency_p95_ms: nullableNum, fallback_rate: nullableNum, error_rate: nullableNum, buckets: z.array(usageBucketSchema),
+});
+export const costsSchema = z.object({
+  since: z.string(), until: z.string(), daily: z.array(z.object({day: z.string(), cost_usd: num, cost_unavailable_requests: z.number()})),
+  by_workflow: z.array(usageBucketSchema), by_model: z.array(usageBucketSchema), by_provider: z.array(usageBucketSchema), by_user: z.array(usageBucketSchema),
+  cost_per_investigation_usd: nullableNum, cost_per_completed_remediation_usd: nullableNum, reserved_vs_actual: z.record(z.string(), num),
+  limit_events: z.array(z.record(z.string(), z.unknown())), total_cost_usd: num, unavailable_cost_requests: z.number(),
+});
+export const budgetSchema = z.object({
+  id: z.string().uuid(), scope: z.string(), workflow: z.string(), hard_limit_usd: num, soft_fraction: num, enabled: z.boolean(), spent_usd: num, reserved_usd: num,
+  unmetered_calls: z.number(), soft_threshold_usd: num, state: z.enum(["ok", "soft_warning", "hard_limit"]), updated_at: z.string(),
+});
+export const providerHealthSchema = z.object({
+  provider: z.string(), model: z.string(), breaker_state: z.enum(["closed", "open", "half_open", "unknown"]), detail: z.string(),
+  consecutive_failures: z.number().nullable(), recent_error_rate: nullableNum, requests_24h: z.number(), errors_24h: z.number(),
+});
+export type PromptSummary = z.infer<typeof promptSummarySchema>;
+export type PromptDetail = z.infer<typeof promptDetailSchema>;
+export type PromptVersion = z.infer<typeof promptVersionSchema>;
+export type GateReport = z.infer<typeof gateReportSchema>;
+export type Dataset = z.infer<typeof datasetSchema>;
+export type EvalRunSummary = z.infer<typeof evalRunSummarySchema>;
+export type EvalRunDetail = z.infer<typeof evalRunDetailSchema>;
+export type EvalResult = z.infer<typeof evalResultSchema>;
+export type Experiment = z.infer<typeof experimentSchema>;
+export type ExperimentDetail = z.infer<typeof experimentDetailSchema>;
+export type UsageBucket = z.infer<typeof usageBucketSchema>;
+export type Usage = z.infer<typeof usageSchema>;
+export type Costs = z.infer<typeof costsSchema>;
+export type Budget = z.infer<typeof budgetSchema>;
+export type ProviderHealth = z.infer<typeof providerHealthSchema>;
+export type EvalVariant = z.infer<typeof evalVariantSchema>;
+export type EvalRunCreate = {dataset_id: string; variant: EvalVariant; control_variant: EvalVariant | null; run_type: z.infer<typeof evalRunTypeSchema>; purpose: z.infer<typeof evalPurposeSchema>; repeat_count: number};
+export type HumanLabelCreate = {rubric_version: string; criterion_scores: Record<string, number>; passed: boolean; notes: string | null};
+export type VariantSpec = {label: string; eval_variant: EvalVariant};
+export type ExperimentCreate = {name: string; workflow: string; control_variant: VariantSpec; candidate_variant: VariantSpec; allocation_percentage: number; unit: "workspace" | "user" | "investigation"; allowed_risks: Array<"low" | "medium">; primary_metric: string; guardrail_metrics: string[]; minimum_sample_size: number};
+export type BudgetPatch = {hard_limit_usd?: number; soft_fraction?: number; enabled?: boolean; reason?: string};
+
 let csrfToken: string | null = null;
 export function setCsrfToken(value: string | null) { csrfToken = value; }
 
@@ -365,14 +467,14 @@ function withAuth(init?: RequestInit): RequestInit {
   return {...init, credentials: "same-origin", headers};
 }
 
-function failFrom(response: Response, parsedMessage: string | null): ApiError {
+function failFrom(response: Response, parsedMessage: string | null, code?: string): ApiError {
   if (response.status === 401) onSessionExpired();
   const fallback = response.status === 403 ? "You do not have permission to do this." : `Request failed (${response.status})`;
-  return new ApiError(response.status, parsedMessage ?? fallback);
+  return new ApiError(response.status, parsedMessage ?? fallback, code);
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public code?: string) { super(message); }
 }
 
 async function request<T>(baseUrl: string, path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
@@ -381,8 +483,8 @@ async function request<T>(baseUrl: string, path: string, schema: z.ZodType<T>, i
   }));
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const parsed = z.object({error: z.object({message: z.string()})}).safeParse(body);
-    throw failFrom(response, parsed.success ? parsed.data.error.message : null);
+    const parsed = z.object({error: z.object({message: z.string(), code: z.string().optional()})}).safeParse(body);
+    throw failFrom(response, parsed.success ? parsed.data.error.message : null, parsed.success ? parsed.data.error.code : undefined);
   }
   return schema.parse(body);
 }
@@ -481,4 +583,24 @@ export const api = {
   obsReplay: (baseUrl: string, workspaceId: string, deadLetterId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/dead-letters/${deadLetterId}/replay`, replaySchema, {method: "POST"}),
   obsDemoGenerate: (baseUrl: string, workspaceId: string, data: DemoGenerateRequest) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/observability/demo/generate`, demoGenerateResponseSchema, {method: "POST", body: JSON.stringify(data)}),
   incidentObservability: (baseUrl: string, workspaceId: string, incidentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/observability`, incidentObservabilitySchema),
+  llmopsPrompts: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/prompts`, z.array(promptSummarySchema)),
+  llmopsPrompt: (baseUrl: string, workspaceId: string, promptId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/prompts/${promptId}`, promptDetailSchema),
+  llmopsPublish: (baseUrl: string, workspaceId: string, promptId: string, data: {version_id: string; eval_run_id: string; override_reason?: string}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/prompts/${promptId}/publish`, promptActionSchema, {method: "POST", body: JSON.stringify(data)}),
+  llmopsRollback: (baseUrl: string, workspaceId: string, promptId: string, data: {target_version_id: string; reason: string}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/prompts/${promptId}/rollback`, promptActionSchema, {method: "POST", body: JSON.stringify(data)}),
+  llmopsDatasets: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/datasets`, z.array(datasetSchema)),
+  llmopsEvalRuns: (baseUrl: string, workspaceId: string, limit = 50) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/eval-runs?limit=${limit}`, z.array(evalRunSummarySchema)),
+  llmopsEvalRun: (baseUrl: string, workspaceId: string, runId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/eval-runs/${runId}`, evalRunDetailSchema),
+  llmopsStartEvalRun: (baseUrl: string, workspaceId: string, data: EvalRunCreate) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/eval-runs`, evalRunSummarySchema, {method: "POST", body: JSON.stringify(data)}),
+  llmopsCancelEvalRun: (baseUrl: string, workspaceId: string, runId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/eval-runs/${runId}/cancel`, evalActionSchema, {method: "POST"}),
+  llmopsHumanLabel: (baseUrl: string, workspaceId: string, resultId: string, data: HumanLabelCreate) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/eval-results/${resultId}/human-label`, humanLabelSchema, {method: "POST", body: JSON.stringify(data)}),
+  llmopsExperiments: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/experiments`, z.array(experimentSchema)),
+  llmopsExperiment: (baseUrl: string, workspaceId: string, experimentId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/experiments/${experimentId}`, experimentDetailSchema),
+  llmopsCreateExperiment: (baseUrl: string, workspaceId: string, data: ExperimentCreate) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/experiments`, experimentSchema, {method: "POST", body: JSON.stringify(data)}),
+  llmopsExperimentAction: (baseUrl: string, workspaceId: string, experimentId: string, action: "start" | "pause") => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/experiments/${experimentId}/${action}`, experimentSchema, {method: "POST"}),
+  llmopsStopExperiment: (baseUrl: string, workspaceId: string, experimentId: string, data: {reason: string; safety: boolean}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/experiments/${experimentId}/stop`, experimentSchema, {method: "POST", body: JSON.stringify(data)}),
+  llmopsUsage: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/usage?${query}`, usageSchema),
+  llmopsCosts: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/costs?${query}`, costsSchema),
+  llmopsBudgets: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/budgets`, z.array(budgetSchema)),
+  llmopsPatchBudget: (baseUrl: string, workspaceId: string, budgetId: string, data: BudgetPatch) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/budgets/${budgetId}`, budgetSchema, {method: "PATCH", body: JSON.stringify(data)}),
+  llmopsProviderHealth: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/llmops/providers/health`, z.array(providerHealthSchema)),
 };

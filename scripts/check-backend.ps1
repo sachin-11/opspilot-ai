@@ -10,6 +10,7 @@ try {
     Invoke-Step 'ruff check' { uv run ruff check . }
     Invoke-Step 'mypy' { uv run mypy }
     Invoke-Step 'pytest (unit)' { uv run pytest }
+    Invoke-Step 'llmops golden evaluation (fake provider, gates)' { uv run python -m opspilot_api.llmops.cli ci --baseline tests/fixtures/llmops_baseline.json --out evaluation-reports }
     if ($Integration) {
         Import-DotEnv
         Invoke-Step 'pytest (integration)' { uv run pytest -m integration }
