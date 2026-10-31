@@ -17,6 +17,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
+from opspilot_api.auth.models import Role, User, WorkspaceMembership
+from opspilot_api.auth.providers import LOCAL_PROVIDER_NAME, issue_local_token
 from opspilot_api.config import Settings, get_settings
 from opspilot_api.incidents.models import Incident, MonitoredService, Workspace
 from opspilot_api.infrastructure import create_db_engine, create_session_factory
@@ -78,7 +80,30 @@ def main() -> None:
             environment="production",
         )
         session.add(service)
+        subject = f"smoke-{suffix}"
+        smoke_user = User(
+            identity_provider=LOCAL_PROVIDER_NAME,
+            external_subject=subject,
+            email=f"{subject}@example.test",
+            display_name="Smoke",
+            status="active",
+        )
+        session.add(smoke_user)
+        session.flush()
+        session.add(
+            WorkspaceMembership(
+                workspace_id=workspace.id,
+                user_id=smoke_user.id,
+                role=Role.OWNER.value,
+                status="active",
+            )
+        )
         session.commit()
+        # Module 7 authenticates every route except the signed webhook; act as the workspace owner.
+        auth = {
+            "Authorization": "Bearer "
+            + issue_local_token(settings, subject, email=smoke_user.email, name="Smoke")
+        }
         app = create_app(settings)
         with TestClient(app) as client:
             app.state.event_bus = bus
@@ -87,6 +112,7 @@ def main() -> None:
                 f"{base}/sources",
                 json={"name": "smoke", "provider": "generic_webhook",
                       "service_id": str(service.id), "environment": "production"},
+                headers=auth,
             ).json()  # fmt: skip
             secret, public_id = created["webhook_secret"], created["public_id"]
 
@@ -144,8 +170,8 @@ def main() -> None:
             )
             if letter is None:
                 raise SystemExit(1)
-            replay = client.post(f"{base}/dead-letters/{letter.id}/replay").json()
-            again = client.post(f"{base}/dead-letters/{letter.id}/replay").json()
+            replay = client.post(f"{base}/dead-letters/{letter.id}/replay", headers=auth).json()
+            again = client.post(f"{base}/dead-letters/{letter.id}/replay", headers=auth).json()
             check(
                 "replay is idempotent",
                 (replay["status"], again["status"]) == ("replayed", "already_replayed"),
