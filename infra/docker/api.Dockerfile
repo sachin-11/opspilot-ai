@@ -11,6 +11,10 @@ COPY migrations ./migrations
 RUN uv sync --frozen --no-dev
 
 FROM python:3.12-slim
+# Pick up distribution security fixes that are newer than the base image snapshot.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system app && useradd --system --gid app --home /app app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app /app
