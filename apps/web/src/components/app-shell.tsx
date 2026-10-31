@@ -26,7 +26,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const visible = links.filter(([href]) => can(ops, NAV_PERMISSIONS[href] ?? "workspace.read"));
   return <div className="app-shell">
     <aside className="sidebar">
-      <div>
+      <div className="sidebar-header">
         <p className="eyebrow">OpsPilot AI</p><h1>Operations</h1>
         {workspaces.length > 1
           ? <label className="workspace-select">Workspace<select aria-label="Workspace" value={workspace?.id ?? ""} onChange={(event) => selectWorkspace(event.target.value)}>{workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -34,8 +34,10 @@ export function AppShell({children}: {children: React.ReactNode}) {
         {user && <p className="muted current-user" aria-label="Signed in user">{user.display_name ?? user.email ?? "Signed in"}{role ? ` · ${ROLE_LABELS[role] ?? role}` : ""}</p>}
       </div>
       <nav aria-label="Primary navigation">{visible.map(([href, label]) => <Link key={href} href={href} className={path === href || (href === "/knowledge" && path.startsWith("/knowledge/") && path !== "/knowledge/search") || (href === "/repositories" && path.startsWith("/repositories/") && path !== "/repositories/search") || (href === "/remediations" && path.startsWith("/remediations/")) || (href === "/llmops" && path.startsWith("/llmops")) ? "active" : ""}>{label}</Link>)}</nav>
-      <p className={`connection ${connection}`}><span aria-hidden="true">●</span> Realtime {connection}</p>
-      <button className="button" onClick={() => void logout()} disabled={signingOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
+      <div className="sidebar-footer">
+        <p className={`connection ${connection}`}><span aria-hidden="true">●</span> Realtime {connection}</p>
+        <button className="button" onClick={() => void logout()} disabled={signingOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
+      </div>
     </aside>
     <main className="content">{workspace ? children : <EmptyWorkspace />}</main>
   </div>;
