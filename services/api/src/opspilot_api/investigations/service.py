@@ -185,6 +185,7 @@ async def submit_review(
     workspace_id: UUID,
     investigation_id: UUID,
     data: ReviewRequest,
+    actor_id: str | None = None,
 ) -> InvestigationReview:
     investigation = await require_investigation(session, workspace_id, investigation_id)
     if investigation.status != InvestigationStatus.AWAITING_REVIEW.value:
@@ -221,6 +222,7 @@ async def submit_review(
         investigation_id=investigation_id,
         action=data.action.value,
         comment=data.comment.strip() if data.comment else None,
+        actor_id=actor_id,
     )
     session.add(review)
     await session.commit()

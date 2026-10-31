@@ -76,6 +76,7 @@ jobs:
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://127.0.0.1:6379/0
+      AUTH_JWT_SECRET: ci-only-jwt-secret-0123456789abcdef-not-real
       AI_PRIMARY_PROVIDER: fake
       AI_PRIMARY_MODEL: deterministic-v1
       LANGGRAPH_STRICT_MSGPACK: "true"

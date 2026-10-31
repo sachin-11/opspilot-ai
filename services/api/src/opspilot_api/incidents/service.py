@@ -13,6 +13,7 @@ from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.models import Role, WorkspaceMember
 from opspilot_api.incidents.models import (
     ActorType,
     Environment,
@@ -110,6 +111,7 @@ def timeline_event(
     actor_type: ActorType,
     metadata: dict[str, object] | None = None,
     occurred_at: datetime | None = None,
+    actor_id: str | None = None,
 ) -> IncidentEvent:
     return IncidentEvent(
         id=uuid4(),
@@ -117,17 +119,21 @@ def timeline_event(
         incident_id=incident.id,
         event_type=event_type.value,
         actor_type=actor_type.value,
+        actor_id=actor_id,
         summary=summary,
         event_metadata=metadata or {},
         occurred_at=occurred_at or utcnow(),
     )
 
 
-async def create_workspace(session: AsyncSession, data: WorkspaceCreate) -> Workspace:
+async def create_workspace(
+    session: AsyncSession, data: WorkspaceCreate, owner_id: UUID
+) -> Workspace:
     workspace = Workspace(
         id=uuid4(), name=data.name.strip(), slug=normalize_slug(data.slug or data.name)
     )
     session.add(workspace)
+    session.add(WorkspaceMember(workspace_id=workspace.id, user_id=owner_id, role=Role.ADMIN.label))
     try:
         await session.commit()
     except IntegrityError as exc:
@@ -179,7 +185,7 @@ async def list_services(session: AsyncSession, workspace_id: UUID) -> list[Monit
 
 
 async def create_manual_incident(
-    session: AsyncSession, workspace_id: UUID, data: IncidentCreate
+    session: AsyncSession, workspace_id: UUID, data: IncidentCreate, actor_id: str | None = None
 ) -> Incident:
     await require_workspace(session, workspace_id)
     if data.service_id is not None:
@@ -205,6 +211,7 @@ async def create_manual_incident(
             "Incident created",
             ActorType.USER,
             occurred_at=now,
+            actor_id=actor_id,
         )
     )
     await session.commit()
@@ -307,7 +314,11 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 
 
 async def update_status(
-    session: AsyncSession, workspace_id: UUID, incident_id: UUID, data: StatusUpdate
+    session: AsyncSession,
+    workspace_id: UUID,
+    incident_id: UUID,
+    data: StatusUpdate,
+    actor_id: str | None = None,
 ) -> tuple[Incident, bool]:
     incident = await require_incident(session, workspace_id, incident_id)
     if data.status.value not in VALID_TRANSITIONS[incident.status]:
@@ -351,6 +362,7 @@ async def update_status(
             ActorType.USER,
             {"from": incident.status, "to": data.status.value},
             now,
+            actor_id,
         )
     )
     await session.commit()
@@ -358,7 +370,11 @@ async def update_status(
 
 
 async def update_severity(
-    session: AsyncSession, workspace_id: UUID, incident_id: UUID, data: SeverityUpdate
+    session: AsyncSession,
+    workspace_id: UUID,
+    incident_id: UUID,
+    data: SeverityUpdate,
+    actor_id: str | None = None,
 ) -> Incident:
     incident = await require_incident(session, workspace_id, incident_id)
     if incident.severity == data.severity.value:
@@ -387,6 +403,7 @@ async def update_severity(
             ActorType.USER,
             {"from": old, "to": data.severity.value},
             now,
+            actor_id,
         )
     )
     await session.commit()
@@ -394,7 +411,11 @@ async def update_severity(
 
 
 async def add_note(
-    session: AsyncSession, workspace_id: UUID, incident_id: UUID, data: NoteCreate
+    session: AsyncSession,
+    workspace_id: UUID,
+    incident_id: UUID,
+    data: NoteCreate,
+    actor_id: str | None = None,
 ) -> IncidentEvent:
     incident = await require_incident(session, workspace_id, incident_id)
     now = utcnow()
@@ -412,7 +433,12 @@ async def add_note(
         await session.rollback()
         raise ConflictError("incident version is stale")
     event = timeline_event(
-        incident, EventType.NOTE_ADDED, data.summary.strip(), ActorType.USER, occurred_at=now
+        incident,
+        EventType.NOTE_ADDED,
+        data.summary.strip(),
+        ActorType.USER,
+        occurred_at=now,
+        actor_id=actor_id,
     )
     session.add(event)
     await session.commit()
@@ -451,7 +477,11 @@ def event_fingerprint(workspace_id: UUID, data: EventIngestRequest) -> str:
 
 
 async def ingest_event(
-    session: AsyncSession, workspace_id: UUID, idempotency_key: str, data: EventIngestRequest
+    session: AsyncSession,
+    workspace_id: UUID,
+    idempotency_key: str,
+    data: EventIngestRequest,
+    actor_id: str | None = None,
 ) -> EventIngestResponse:
     await require_workspace(session, workspace_id)
     await require_service(session, workspace_id, data.service_id)
@@ -542,6 +572,7 @@ async def ingest_event(
             ActorType.INTEGRATION,
             {"event_id": str(event.id), "source": data.source},
             data.occurred_at,
+            actor_id,
         )
     )
     await session.commit()

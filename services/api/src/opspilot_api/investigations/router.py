@@ -1,15 +1,14 @@
 """Thin REST adapters for queued, human-reviewed investigations."""
 
 import logging
-from collections.abc import AsyncIterator
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Request, status
 from redis.exceptions import RedisError
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.deps import Responder, Viewer
 from opspilot_api.config import Settings
+from opspilot_api.dependencies import Session
 from opspilot_api.incidents.service import publish_notification
 from opspilot_api.investigations.models import InvestigationStatus, ReviewAction
 from opspilot_api.investigations.queue import enqueue_investigation, enqueue_review_resume
@@ -33,14 +32,6 @@ from opspilot_api.investigations.service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["investigations"])
-
-
-async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
-    async with request.app.state.session_factory() as session:
-        yield session
-
-
-Session = Annotated[AsyncSession, Depends(get_session)]
 
 
 async def notify(
@@ -74,6 +65,7 @@ async def post_investigation(
     workspace_id: UUID,
     incident_id: UUID,
     data: InvestigationCreate,
+    _principal: Responder,
     session: Session,
 ) -> InvestigationQueuedResponse:
     settings: Settings = request.app.state.settings
@@ -99,7 +91,7 @@ async def post_investigation(
     response_model=list[InvestigationSummary],
 )
 async def get_investigations(
-    workspace_id: UUID, incident_id: UUID, session: Session
+    workspace_id: UUID, incident_id: UUID, _principal: Viewer, session: Session
 ) -> list[InvestigationSummary]:
     return [
         InvestigationSummary.model_validate(item)
@@ -112,7 +104,7 @@ async def get_investigations(
     response_model=InvestigationDetail,
 )
 async def get_investigation(
-    workspace_id: UUID, investigation_id: UUID, session: Session
+    workspace_id: UUID, investigation_id: UUID, _principal: Viewer, session: Session
 ) -> InvestigationDetail:
     return await investigation_detail(session, workspace_id, investigation_id)
 
@@ -127,6 +119,7 @@ async def post_review(
     workspace_id: UUID,
     investigation_id: UUID,
     data: ReviewRequest,
+    principal: Responder,
     session: Session,
 ) -> ActionResponse:
     settings: Settings = request.app.state.settings
@@ -137,6 +130,7 @@ async def post_review(
         workspace_id,
         investigation_id,
         data,
+        principal.actor_id,
     )
     enqueue_review_resume(settings, workspace_id, investigation_id, review.id)
     event_type = (
@@ -167,6 +161,7 @@ async def post_cancel(
     request: Request,
     workspace_id: UUID,
     investigation_id: UUID,
+    _principal: Responder,
     session: Session,
 ) -> ActionResponse:
     investigation = await cancel_investigation(session, workspace_id, investigation_id)
@@ -193,6 +188,7 @@ async def post_retry(
     request: Request,
     workspace_id: UUID,
     investigation_id: UUID,
+    _principal: Responder,
     session: Session,
 ) -> InvestigationQueuedResponse:
     settings: Settings = request.app.state.settings

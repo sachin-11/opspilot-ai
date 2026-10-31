@@ -16,6 +16,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 TEST_PASSWORD = "test-only-password"  # not a real credential
+TEST_JWT_SECRET = "test-only-jwt-secret-0123456789abcdef"  # not a real credential
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -28,6 +29,7 @@ def make_settings(**overrides: object) -> Settings:
         "POSTGRES_HOST": "127.0.0.1",
         "POSTGRES_PORT": 1,  # nothing listens here
         "REDIS_URL": "redis://:redis-test-secret@127.0.0.1:1/0",
+        "AUTH_JWT_SECRET": TEST_JWT_SECRET,
         "DEPENDENCY_TIMEOUT_SECONDS": 0.5,
         **overrides,
     }

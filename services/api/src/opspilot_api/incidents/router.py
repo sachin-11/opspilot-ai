@@ -1,15 +1,14 @@
 """Thin HTTP and WebSocket adapters for the incident domain."""
 
 import asyncio
+import json
 import logging
-from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
-    Depends,
     Header,
     Query,
     Request,
@@ -18,8 +17,17 @@ from fastapi import (
     status,
 )
 from redis.exceptions import RedisError
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.deps import Admin, CurrentUser, Ingestor, Responder, Viewer
+from opspilot_api.auth.models import Role
+from opspilot_api.auth.service import (
+    UnauthorizedError,
+    list_memberships,
+    principal_for_user,
+    user_from_access_token,
+)
+from opspilot_api.config import Settings
+from opspilot_api.dependencies import Session
 from opspilot_api.incidents.models import Environment, IncidentStatus, Severity
 from opspilot_api.incidents.schemas import (
     EventIngestRequest,
@@ -48,7 +56,6 @@ from opspilot_api.incidents.service import (
     list_incidents,
     list_services,
     list_timeline,
-    list_workspaces,
     publish_notification,
     require_service,
     require_workspace,
@@ -59,14 +66,6 @@ from opspilot_api.incidents.service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
-
-
-async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
-    async with request.app.state.session_factory() as session:
-        yield session
-
-
-Session = Annotated[AsyncSession, Depends(get_session)]
 
 
 async def notify(request: Request, workspace_id: UUID, incident_id: UUID, event_type: str) -> None:
@@ -82,17 +81,24 @@ async def notify(request: Request, workspace_id: UUID, incident_id: UUID, event_
     status_code=status.HTTP_201_CREATED,
     tags=["workspaces"],
 )
-async def post_workspace(data: WorkspaceCreate, session: Session) -> WorkspaceResponse:
-    return WorkspaceResponse.model_validate(await create_workspace(session, data))
+async def post_workspace(
+    data: WorkspaceCreate, user: CurrentUser, session: Session
+) -> WorkspaceResponse:
+    return WorkspaceResponse.model_validate(await create_workspace(session, data, user.id))
 
 
 @router.get("/workspaces", response_model=list[WorkspaceResponse], tags=["workspaces"])
-async def get_workspaces(session: Session) -> list[WorkspaceResponse]:
-    return [WorkspaceResponse.model_validate(item) for item in await list_workspaces(session)]
+async def get_workspaces(user: CurrentUser, session: Session) -> list[WorkspaceResponse]:
+    return [
+        WorkspaceResponse.model_validate(workspace)
+        for workspace, _role in await list_memberships(session, user.id)
+    ]
 
 
 @router.get("/workspaces/{workspace_id}", response_model=WorkspaceResponse, tags=["workspaces"])
-async def get_workspace(workspace_id: UUID, session: Session) -> WorkspaceResponse:
+async def get_workspace(
+    workspace_id: UUID, _principal: Viewer, session: Session
+) -> WorkspaceResponse:
     return WorkspaceResponse.model_validate(await require_workspace(session, workspace_id))
 
 
@@ -103,7 +109,7 @@ async def get_workspace(workspace_id: UUID, session: Session) -> WorkspaceRespon
     tags=["services"],
 )
 async def post_service(
-    workspace_id: UUID, data: ServiceCreate, session: Session
+    workspace_id: UUID, data: ServiceCreate, _principal: Admin, session: Session
 ) -> ServiceResponse:
     return ServiceResponse.model_validate(await create_service(session, workspace_id, data))
 
@@ -111,7 +117,9 @@ async def post_service(
 @router.get(
     "/workspaces/{workspace_id}/services", response_model=list[ServiceResponse], tags=["services"]
 )
-async def get_services(workspace_id: UUID, session: Session) -> list[ServiceResponse]:
+async def get_services(
+    workspace_id: UUID, _principal: Viewer, session: Session
+) -> list[ServiceResponse]:
     return [
         ServiceResponse.model_validate(item) for item in await list_services(session, workspace_id)
     ]
@@ -122,7 +130,9 @@ async def get_services(workspace_id: UUID, session: Session) -> list[ServiceResp
     response_model=ServiceResponse,
     tags=["services"],
 )
-async def get_service(workspace_id: UUID, service_id: UUID, session: Session) -> ServiceResponse:
+async def get_service(
+    workspace_id: UUID, service_id: UUID, _principal: Viewer, session: Session
+) -> ServiceResponse:
     return ServiceResponse.model_validate(await require_service(session, workspace_id, service_id))
 
 
@@ -133,9 +143,13 @@ async def get_service(workspace_id: UUID, service_id: UUID, session: Session) ->
     tags=["incidents"],
 )
 async def post_incident(
-    request: Request, workspace_id: UUID, data: IncidentCreate, session: Session
+    request: Request,
+    workspace_id: UUID,
+    data: IncidentCreate,
+    principal: Responder,
+    session: Session,
 ) -> IncidentResponse:
-    incident = await create_manual_incident(session, workspace_id, data)
+    incident = await create_manual_incident(session, workspace_id, data, principal.actor_id)
     await notify(request, workspace_id, incident.id, "incident.created")
     return await get_incident_response(session, workspace_id, incident.id)
 
@@ -145,6 +159,7 @@ async def post_incident(
 )
 async def get_incidents(
     workspace_id: UUID,
+    _principal: Viewer,
     session: Session,
     status_filter: Annotated[list[IncidentStatus] | None, Query(alias="status")] = None,
     severity: Annotated[list[Severity] | None, Query()] = None,
@@ -170,7 +185,9 @@ async def get_incidents(
     response_model=IncidentResponse,
     tags=["incidents"],
 )
-async def get_incident(workspace_id: UUID, incident_id: UUID, session: Session) -> IncidentResponse:
+async def get_incident(
+    workspace_id: UUID, incident_id: UUID, _principal: Viewer, session: Session
+) -> IncidentResponse:
     return await get_incident_response(session, workspace_id, incident_id)
 
 
@@ -180,9 +197,16 @@ async def get_incident(workspace_id: UUID, incident_id: UUID, session: Session) 
     tags=["incidents"],
 )
 async def patch_status(
-    request: Request, workspace_id: UUID, incident_id: UUID, data: StatusUpdate, session: Session
+    request: Request,
+    workspace_id: UUID,
+    incident_id: UUID,
+    data: StatusUpdate,
+    principal: Responder,
+    session: Session,
 ) -> IncidentResponse:
-    _incident, reopened = await update_status(session, workspace_id, incident_id, data)
+    _incident, reopened = await update_status(
+        session, workspace_id, incident_id, data, principal.actor_id
+    )
     event_type = "incident.reopened" if reopened else "incident.status_changed"
     await notify(request, workspace_id, incident_id, event_type)
     return await get_incident_response(session, workspace_id, incident_id)
@@ -194,9 +218,14 @@ async def patch_status(
     tags=["incidents"],
 )
 async def patch_severity(
-    request: Request, workspace_id: UUID, incident_id: UUID, data: SeverityUpdate, session: Session
+    request: Request,
+    workspace_id: UUID,
+    incident_id: UUID,
+    data: SeverityUpdate,
+    principal: Responder,
+    session: Session,
 ) -> IncidentResponse:
-    await update_severity(session, workspace_id, incident_id, data)
+    await update_severity(session, workspace_id, incident_id, data, principal.actor_id)
     await notify(request, workspace_id, incident_id, "incident.severity_changed")
     return await get_incident_response(session, workspace_id, incident_id)
 
@@ -207,7 +236,7 @@ async def patch_severity(
     tags=["incidents"],
 )
 async def get_timeline(
-    workspace_id: UUID, incident_id: UUID, session: Session
+    workspace_id: UUID, incident_id: UUID, _principal: Viewer, session: Session
 ) -> list[TimelineResponse]:
     return [
         TimelineResponse.model_validate(item)
@@ -222,9 +251,14 @@ async def get_timeline(
     tags=["incidents"],
 )
 async def post_note(
-    request: Request, workspace_id: UUID, incident_id: UUID, data: NoteCreate, session: Session
+    request: Request,
+    workspace_id: UUID,
+    incident_id: UUID,
+    data: NoteCreate,
+    principal: Responder,
+    session: Session,
 ) -> TimelineResponse:
-    event = await add_note(session, workspace_id, incident_id, data)
+    event = await add_note(session, workspace_id, incident_id, data, principal.actor_id)
     await notify(request, workspace_id, incident_id, "incident.note_added")
     return TimelineResponse.model_validate(event)
 
@@ -239,10 +273,11 @@ async def post_event(
     request: Request,
     workspace_id: UUID,
     data: EventIngestRequest,
+    principal: Ingestor,
     session: Session,
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)],
 ) -> EventIngestResponse:
-    result = await ingest_event(session, workspace_id, idempotency_key, data)
+    result = await ingest_event(session, workspace_id, idempotency_key, data, principal.actor_id)
     await notify(
         request,
         workspace_id,
@@ -252,15 +287,42 @@ async def post_event(
     return result
 
 
+WEBSOCKET_AUTH_TIMEOUT_SECONDS = 5.0
+
+
+async def authenticate_socket(websocket: WebSocket, workspace_id: UUID) -> bool:
+    """First-message auth keeps tokens out of URLs and access logs.
+
+    The client must send ``{"type": "auth", "token": "<access token>"}`` right after connecting.
+    Closes with 4401 (bad or missing credentials) or 4404 (not a member) and returns False.
+    """
+    settings: Settings = websocket.app.state.settings
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), WEBSOCKET_AUTH_TIMEOUT_SECONDS)
+        message = json.loads(raw)
+        token = message["token"] if message.get("type") == "auth" else None
+        if not isinstance(token, str):
+            raise UnauthorizedError("auth message required")
+        async with websocket.app.state.session_factory() as session:
+            user = await user_from_access_token(session, settings, token)
+            await principal_for_user(session, user.id, workspace_id, Role.VIEWER)
+    except (TimeoutError, ValueError, KeyError, AttributeError, UnauthorizedError):
+        await websocket.close(code=4401)
+        return False
+    except NotFoundError:
+        await websocket.close(code=4404)
+        return False
+    return True
+
+
 @router.websocket("/ws/workspaces/{workspace_id}/incidents")
 async def incident_socket(websocket: WebSocket, workspace_id: UUID) -> None:
-    async with websocket.app.state.session_factory() as session:
-        try:
-            await require_workspace(session, workspace_id)
-        except NotFoundError:
-            await websocket.close(code=4404)
-            return
     await websocket.accept()
+    try:
+        if not await authenticate_socket(websocket, workspace_id):
+            return
+    except WebSocketDisconnect:
+        return
     redis = websocket.app.state.redis
     pubsub = redis.pubsub()
     channel = f"opspilot:workspace:{workspace_id}:incidents"

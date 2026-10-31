@@ -1,10 +1,14 @@
 """Idempotent development data seed. Run with ``python -m opspilot_api.incidents.seed``."""
 
 import asyncio
+import os
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.models import Role, User
+from opspilot_api.auth.service import add_member, create_user, normalize_email
 from opspilot_api.config import Environment as AppEnvironment
 from opspilot_api.config import get_settings
 from opspilot_api.incidents.models import (
@@ -32,6 +36,20 @@ from opspilot_api.incidents.service import (
 from opspilot_api.infrastructure import create_db_engine, create_session_factory
 
 
+async def ensure_demo_admin(session: AsyncSession) -> User:
+    """Create the demo admin on first run. The password must come from the environment."""
+    email = os.environ.get("SEED_ADMIN_EMAIL", "demo@opspilot.local")
+    user = await session.scalar(select(User).where(User.email == normalize_email(email)))
+    if user is not None:
+        return user
+    password = os.environ.get("SEED_ADMIN_PASSWORD", "")
+    if len(password) < 12:
+        raise RuntimeError(
+            "set SEED_ADMIN_PASSWORD (at least 12 characters) to create the demo admin"
+        )
+    return await create_user(session, email, "Demo Admin", password)
+
+
 async def seed() -> None:
     settings = get_settings()
     if settings.APP_ENV is AppEnvironment.PRODUCTION:
@@ -40,13 +58,18 @@ async def seed() -> None:
     factory = create_session_factory(engine)
     try:
         async with factory() as session:
+            owner = await ensure_demo_admin(session)
             workspace = await session.scalar(
                 select(Workspace).where(Workspace.slug == "demo-operations")
             )
             if workspace is None:
                 workspace = await create_workspace(
-                    session, WorkspaceCreate(name="Demo Operations", slug="demo-operations")
+                    session,
+                    WorkspaceCreate(name="Demo Operations", slug="demo-operations"),
+                    owner.id,
                 )
+            else:
+                await add_member(session, workspace.id, owner.id, Role.ADMIN)
 
             service_specs = [
                 ("Checkout API", "checkout-api", Environment.PRODUCTION),

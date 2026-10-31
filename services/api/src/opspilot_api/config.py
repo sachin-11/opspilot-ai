@@ -60,6 +60,14 @@ class Settings(BaseSettings):
 
     REDIS_URL: SecretStr
 
+    AUTH_JWT_SECRET: SecretStr
+    AUTH_ACCESS_TOKEN_MINUTES: int = Field(default=15, ge=1, le=120)
+    AUTH_REFRESH_TOKEN_DAYS: int = Field(default=7, ge=1, le=90)
+    AUTH_SIGNUP_ENABLED: bool = False
+    AUTH_LOGIN_MAX_ATTEMPTS: int = Field(default=10, ge=1, le=1000)
+    AUTH_LOGIN_WINDOW_SECONDS: int = Field(default=900, ge=10, le=86400)
+    INGEST_RATE_LIMIT_PER_MINUTE: int = Field(default=600, ge=1, le=100000)
+
     DEPENDENCY_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
 
     AI_PRIMARY_PROVIDER: str = Field(default="fake", min_length=1, max_length=50)
@@ -103,6 +111,13 @@ class Settings(BaseSettings):
     def _password_not_blank(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value():
             raise ValueError("POSTGRES_PASSWORD must not be empty")
+        return value
+
+    @field_validator("AUTH_JWT_SECRET")
+    @classmethod
+    def _check_jwt_secret(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value()) < 32:
+            raise ValueError("AUTH_JWT_SECRET must be at least 32 characters")
         return value
 
     @field_validator("REDIS_URL")

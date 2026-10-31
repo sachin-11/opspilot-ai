@@ -25,12 +25,18 @@ class ErrorResponse(BaseModel):
     error: ErrorBody
 
 
-def _response(request: Request, status_code: int, code: str, message: str) -> JSONResponse:
+def _response(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     # Unhandled errors are rendered outside the correlation middleware, after its
     # context var is reset, so the ID is also kept on the ASGI scope state.
     correlation_id = correlation_id_var.get() or getattr(request.state, "correlation_id", None)
     body = ErrorResponse(error=ErrorBody(code=code, message=message, correlation_id=correlation_id))
-    response = JSONResponse(status_code=status_code, content=body.model_dump())
+    response = JSONResponse(status_code=status_code, content=body.model_dump(), headers=headers)
     if correlation_id:
         response.headers["X-Request-ID"] = correlation_id
     return response
@@ -39,7 +45,9 @@ def _response(request: Request, status_code: int, code: str, message: str) -> JS
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, exc: DomainError) -> JSONResponse:
-        return _response(request, exc.status_code, exc.code, str(exc))
+        return _response(
+            request, exc.status_code, exc.code, str(exc), getattr(exc, "headers", None)
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:

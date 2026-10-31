@@ -26,11 +26,36 @@ from opspilot_api.worker.jobs import resume_investigation
 pytestmark = pytest.mark.integration
 
 
+TEST_USER_PASSWORD = "integration-test-password"  # not a real credential
+
+
+def random_client_ip() -> str:
+    """A unique source address per test so Redis rate-limit counters never carry over."""
+    return f"10.{uuid4().int % 250}.{uuid4().int % 250}.{uuid4().int % 250 + 1}"
+
+
+def signup_and_login(client: TestClient, prefix: str = "user") -> dict[str, str]:
+    """Create a user through the API and return its Authorization header."""
+    email = f"{prefix}-{uuid4().hex[:10]}@example.com"
+    signup = client.post(
+        "/api/v1/auth/signup",
+        json={"email": email, "display_name": prefix, "password": TEST_USER_PASSWORD},
+    )
+    assert signup.status_code == 201, signup.text
+    login = client.post("/api/v1/auth/login", json={"email": email, "password": TEST_USER_PASSWORD})
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
 @pytest.fixture
-def live_client() -> Iterator[TestClient]:
+def live_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setenv("AUTH_SIGNUP_ENABLED", "true")
+    monkeypatch.setenv("AUTH_LOGIN_MAX_ATTEMPTS", "1000")
     get_settings.cache_clear()
-    with TestClient(create_app(get_settings())) as client:
+    with TestClient(create_app(get_settings()), client=(random_client_ip(), 50000)) as client:
+        client.headers.update(signup_and_login(client, "admin"))
         yield client
+    get_settings.cache_clear()
 
 
 def test_ready_with_real_dependencies(live_client: TestClient) -> None:
@@ -486,6 +511,8 @@ def test_websocket_workspace_isolation_and_pubsub_cleanup(live_client: TestClien
     second_channel = f"opspilot:workspace:{second_id}:incidents"
     try:
         with live_client.websocket_connect(f"/api/v1/ws/workspaces/{first_id}/incidents") as socket:
+            token = live_client.headers["Authorization"].removeprefix("Bearer ")
+            socket.send_json({"type": "auth", "token": token})
             connected = socket.receive_json()
             assert connected["type"] == "connection.established"
             counts = dict(redis.pubsub_numsub(first_channel, second_channel))
