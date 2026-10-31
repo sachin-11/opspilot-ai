@@ -712,7 +712,12 @@ def test_websocket_workspace_isolation_and_pubsub_cleanup(live_client: TestClien
     first_channel = f"opspilot:workspace:{first_id}:incidents"
     second_channel = f"opspilot:workspace:{second_id}:incidents"
     try:
-        with live_client.websocket_connect(f"/api/v1/ws/workspaces/{first_id}/incidents") as socket:
+        ticket = live_client.post(
+            "/api/v1/auth/ws-ticket", json={"workspace_id": first_id, "channel": "incidents"}
+        ).json()["ticket"]
+        with live_client.websocket_connect(
+            f"/api/v1/ws/workspaces/{first_id}/incidents?ticket={ticket}"
+        ) as socket:
             connected = socket.receive_json()
             assert connected["type"] == "connection.established"
             counts = dict(redis.pubsub_numsub(first_channel, second_channel))

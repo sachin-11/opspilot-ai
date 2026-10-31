@@ -41,6 +41,13 @@ x-api-env: &api-env
   LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
   LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
   LANGGRAPH_STRICT_MSGPACK: "true"
+  AUTH_PROVIDER: ${AUTH_PROVIDER:-local}
+  AUTH_OIDC_ISSUER: ${AUTH_OIDC_ISSUER:-}
+  AUTH_OIDC_AUDIENCE: ${AUTH_OIDC_AUDIENCE:-}
+  AUTH_OIDC_TOKEN_USE: ${AUTH_OIDC_TOKEN_USE:-access}
+  AUTH_LOCAL_SIGNING_KEY: ${AUTH_LOCAL_SIGNING_KEY:-local-dev-only-signing-key-do-not-use-elsewhere}
+  AUTH_AUDIT_KEY: ${AUTH_AUDIT_KEY:-local-dev-only-audit-integrity-key-0123456789}
+  AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
   REMEDIATION_SANDBOX_PROVIDER: ${REMEDIATION_SANDBOX_PROVIDER:-docker}
   REMEDIATION_SANDBOX_IMAGE: ${REMEDIATION_SANDBOX_IMAGE:-opspilot-sandbox:latest}
   REMEDIATION_MAX_FILES: ${REMEDIATION_MAX_FILES:-5}
@@ -280,6 +287,18 @@ services:
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set NEXT_PUBLIC_API_BASE_URL in .env}
     image: opspilot-web:dev
+    environment:
+      # Server-side only (never exposed to the browser): sealed-session secret and OIDC settings.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env (at least 32 characters)}
+      AUTH_MODE: ${AUTH_MODE:-local}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3300}
+      API_INTERNAL_URL: http://api:8000
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-opspilot-web}
+      OIDC_AUTHORIZATION_URL: ${OIDC_AUTHORIZATION_URL:-http://localhost:8300/api/v1/auth/local/authorize}
+      OIDC_TOKEN_URL: ${OIDC_TOKEN_URL:-http://api:8000/api/v1/auth/local/token}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      AUTH_LOCAL_SIGNING_KEY: ${AUTH_LOCAL_SIGNING_KEY:-local-dev-only-signing-key-do-not-use-elsewhere}
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-3300}:3000"
     depends_on:

@@ -200,6 +200,37 @@ class Settings(BaseSettings):
     )
     REMEDIATION_WORKSPACE_ROOT: str | None = None
 
+    # --- Module 7 authentication and authorization ---
+    AUTH_PROVIDER: str = Field(default="local", pattern="^(local|oidc)$")
+    AUTH_OIDC_ISSUER: str | None = None
+    # Expected audience; for Cognito access tokens this is the app client ID (``client_id`` claim).
+    AUTH_OIDC_AUDIENCE: str | None = None
+    AUTH_OIDC_ALGORITHMS: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["RS256"])
+    # ``access`` (Cognito access token) or ``id``; compared with the ``token_use`` claim.
+    AUTH_OIDC_TOKEN_USE: str = Field(default="access", pattern="^(access|id)$")
+    AUTH_JWKS_CACHE_SECONDS: int = Field(default=600, ge=30, le=86_400)
+    AUTH_JWKS_TIMEOUT_SECONDS: float = Field(default=5, gt=0, le=30)
+    AUTH_CLOCK_SKEW_SECONDS: int = Field(default=30, ge=0, le=300)
+    # Local provider only (development/test). The default is refused outside those environments.
+    AUTH_LOCAL_SIGNING_KEY: SecretStr = SecretStr("local-dev-only-signing-key-do-not-use-elsewhere")
+    AUTH_LOCAL_TOKEN_TTL_SECONDS: int = Field(default=900, ge=60, le=3600)
+    AUTH_AUDIT_KEY: SecretStr = SecretStr("local-dev-only-audit-integrity-key-0123456789")
+    AUTH_INVITATION_TTL_HOURS: int = Field(default=72, ge=1, le=720)
+    AUTH_WS_TICKET_TTL_SECONDS: int = Field(default=30, ge=5, le=120)
+    AUTH_WS_MAX_CONNECTIONS_PER_USER: int = Field(default=5, ge=1, le=50)
+    AUTH_API_KEY_MAX_ACTIVE: int = Field(default=25, ge=1, le=500)
+    AUTH_API_KEY_MAX_TTL_DAYS: int = Field(default=365, ge=1, le=3650)
+    AUTH_API_KEY_TOUCH_SECONDS: int = Field(default=300, ge=10, le=86_400)
+    AUTH_RATE_LIMIT_ENABLED: bool = True
+    AUTH_RATE_LIMIT_MULTIPLIER: float = Field(default=1.0, gt=0, le=1000)
+
+    @field_validator("AUTH_OIDC_ALGORITHMS", mode="before")
+    @classmethod
+    def _split_algorithms(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
     @field_validator("REMEDIATION_WRITE_ENABLED_REPOSITORIES", mode="before")
     @classmethod
     def _split_write_repositories(cls, value: object) -> object:
@@ -309,6 +340,30 @@ class Settings(BaseSettings):
                 raise ValueError("GITHUB_APP_ID and a private key are required for GitHub")
             if self.GITHUB_WEBHOOK_SECRET is None:
                 raise ValueError("GITHUB_WEBHOOK_SECRET is required for GitHub")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_auth_configuration(self) -> Self:
+        local_allowed = self.APP_ENV in {Environment.DEVELOPMENT, Environment.TEST}
+        if self.AUTH_PROVIDER == "local" and not local_allowed:
+            raise ValueError("AUTH_PROVIDER=local is only allowed in development and test")
+        if self.AUTH_PROVIDER == "oidc":
+            if not self.AUTH_OIDC_ISSUER or not self.AUTH_OIDC_AUDIENCE:
+                raise ValueError("AUTH_OIDC_ISSUER and AUTH_OIDC_AUDIENCE are required for oidc")
+            if not self.AUTH_OIDC_ISSUER.startswith("https://") and local_allowed is False:
+                raise ValueError("AUTH_OIDC_ISSUER must be https outside development")
+            if any(
+                alg.lower() in {"none", "hs256", "hs384", "hs512"}
+                for alg in self.AUTH_OIDC_ALGORITHMS
+            ):
+                raise ValueError("AUTH_OIDC_ALGORITHMS must be asymmetric signing algorithms")
+        if not local_allowed:
+            dev_defaults = ("local-dev-only-audit-integrity-key", "local-dev-only-signing-key")
+            audit = self.AUTH_AUDIT_KEY.get_secret_value()
+            if audit.startswith(dev_defaults[0]) or len(audit) < 32:
+                raise ValueError(
+                    "AUTH_AUDIT_KEY must be set to a strong secret outside development"
+                )
         return self
 
     @model_validator(mode="after")

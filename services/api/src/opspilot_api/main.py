@@ -4,10 +4,14 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from opspilot_api import v1
+from opspilot_api.auth.dependencies import authorize_request
+from opspilot_api.auth.providers import create_identity_provider
+from opspilot_api.auth.ratelimit import RateLimiter
+from opspilot_api.auth.router import router as auth_router
 from opspilot_api.config import APP_NAME, APP_VERSION, Settings, get_settings
 from opspilot_api.errors import register_exception_handlers
 from opspilot_api.health.router import router as health_router
@@ -38,6 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_engine = create_db_engine(settings)
     app.state.session_factory = create_session_factory(app.state.db_engine)
     app.state.redis = create_redis_client(settings)
+    app.state.rate_limiter = RateLimiter(app.state.redis, settings)
     logger.info(
         "api starting",
         extra={"environment": settings.APP_ENV.value, "version": APP_VERSION},
@@ -54,14 +59,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.LOG_LEVEL.value)
 
-    app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
+    # Fails startup on misconfiguration (e.g. local auth in production).
+    identity_provider = create_identity_provider(settings)
+    app = FastAPI(
+        title=APP_NAME,
+        version=APP_VERSION,
+        lifespan=lifespan,
+        dependencies=[Depends(authorize_request)],
+    )
     app.state.settings = settings
+    app.state.identity_provider = identity_provider
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=[CORRELATION_HEADER, "Content-Type", "Idempotency-Key"],
+        allow_headers=[
+            CORRELATION_HEADER,
+            "Content-Type",
+            "Idempotency-Key",
+            "Authorization",
+            "X-API-Key",
+        ],
         expose_headers=[CORRELATION_HEADER],
     )
     app.add_middleware(EventPayloadLimitMiddleware)
@@ -70,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(v1.router)
+    app.include_router(auth_router)
     app.include_router(incidents_router)
     app.include_router(investigations_router)
     app.include_router(knowledge_router)

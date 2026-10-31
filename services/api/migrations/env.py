@@ -5,6 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+from opspilot_api.auth import models as auth_models  # noqa: F401
 from opspilot_api.config import get_settings
 from opspilot_api.incidents.models import Base
 from opspilot_api.investigations import models as investigation_models  # noqa: F401

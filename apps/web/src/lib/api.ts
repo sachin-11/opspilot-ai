@@ -329,28 +329,70 @@ export type RemediationVerification = z.infer<typeof remediationVerificationSche
 export type SandboxRun = z.infer<typeof sandboxRunSchema>;
 export type ApprovalAction = z.infer<typeof approvalActionSchema>;
 
+export const roleSchema = z.enum(["owner", "admin", "responder", "analyst", "viewer"]);
+export const meSchema = z.object({id: z.string().uuid(), email: z.string().nullable(), display_name: z.string().nullable(), identity_provider: z.string(), status: z.string()});
+export const membershipSummarySchema = z.object({workspace: workspaceSchema, membership_id: z.string().uuid(), role: roleSchema, permissions: z.array(z.string())});
+export const memberSchema = z.object({id: z.string().uuid(), user_id: z.string().uuid(), email: z.string().nullable(), display_name: z.string().nullable(), role: roleSchema, status: z.enum(["active", "suspended", "revoked"]), created_at: z.string()});
+export const invitationSchema = z.object({id: z.string().uuid(), email: z.string(), role: roleSchema, expires_at: z.string(), accepted_at: z.string().nullable(), revoked_at: z.string().nullable(), created_at: z.string()});
+export const invitationCreatedSchema = invitationSchema.extend({token: z.string()});
+export const apiKeySchema = z.object({id: z.string().uuid(), name: z.string(), key_prefix: z.string(), scopes: z.array(z.string()), status: z.enum(["active", "revoked", "expired"]), created_by_user_id: z.string().uuid(), expires_at: z.string().nullable(), last_used_at: z.string().nullable(), revoked_at: z.string().nullable(), created_at: z.string()});
+export const apiKeyCreatedSchema = apiKeySchema.extend({key: z.string()});
+export const auditEventSchema = z.object({id: z.string().uuid(), workspace_id: z.string().uuid().nullable(), actor_type: z.string(), actor_user_id: z.string().uuid().nullable(), actor_api_key_id: z.string().uuid().nullable(), action: z.string(), resource_type: z.string(), resource_id: z.string().nullable(), request_id: z.string(), result: z.enum(["success", "denied", "failed"]), reason_code: z.string().nullable(), metadata: z.record(z.string(), z.unknown()), integrity_valid: z.boolean(), occurred_at: z.string()});
+export const auditPageSchema = z.object({items: z.array(auditEventSchema), next_cursor: z.string().nullable()});
+export const wsTicketSchema = z.object({ticket: z.string(), expires_in_seconds: z.number(), channel: z.string()});
+export type Role = z.infer<typeof roleSchema>;
+export type Me = z.infer<typeof meSchema>;
+export type MembershipSummary = z.infer<typeof membershipSummarySchema>;
+export type Member = z.infer<typeof memberSchema>;
+export type Invitation = z.infer<typeof invitationSchema>;
+export type ApiKey = z.infer<typeof apiKeySchema>;
+export type AuditEvent = z.infer<typeof auditEventSchema>;
+export const API_SCOPES = ["events:write", "incidents:read", "knowledge:read", "investigations:read"] as const;
+
+let csrfToken: string | null = null;
+export function setCsrfToken(value: string | null) { csrfToken = value; }
+
+/** Hook invoked on a 401 from the BFF (session expired). Defaults to a redirect in the browser. */
+let onSessionExpired: () => void = () => {
+  if (typeof window !== "undefined") window.location.href = `/session-expired?returnTo=${encodeURIComponent(window.location.pathname)}`;
+};
+export function setSessionExpiredHandler(handler: () => void) { onSessionExpired = handler; }
+
+function withAuth(init?: RequestInit): RequestInit {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {...(init?.headers as Record<string, string> | undefined)};
+  if (csrfToken && method !== "GET" && method !== "HEAD") headers["X-CSRF-Token"] = csrfToken;
+  return {...init, credentials: "same-origin", headers};
+}
+
+function failFrom(response: Response, parsedMessage: string | null): ApiError {
+  if (response.status === 401) onSessionExpired();
+  const fallback = response.status === 403 ? "You do not have permission to do this." : `Request failed (${response.status})`;
+  return new ApiError(response.status, parsedMessage ?? fallback);
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
 async function request<T>(baseUrl: string, path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetch(`${baseUrl}${path}`, withAuth({
     ...init, headers: {"Content-Type": "application/json", ...init?.headers},
-  });
+  }));
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const parsed = z.object({error: z.object({message: z.string()})}).safeParse(body);
-    throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
+    throw failFrom(response, parsed.success ? parsed.data.error.message : null);
   }
   return schema.parse(body);
 }
 
 async function requestEmpty(baseUrl: string, path: string, init: RequestInit): Promise<void> {
-  const response = await fetch(`${baseUrl}${path}`, {...init, headers: {"Content-Type": "application/json", ...init.headers}});
+  const response = await fetch(`${baseUrl}${path}`, withAuth({...init, headers: {"Content-Type": "application/json", ...init.headers}}));
   if (response.ok) return;
   const body: unknown = await response.json().catch(() => null);
   const parsed = z.object({error: z.object({message: z.string()})}).safeParse(body);
-  throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
+  throw failFrom(response, parsed.success ? parsed.data.error.message : null);
 }
 
 export function isProviderUnavailable(error: unknown): boolean {
@@ -358,11 +400,11 @@ export function isProviderUnavailable(error: unknown): boolean {
 }
 
 async function multipartRequest<T>(baseUrl: string, path: string, schema: z.ZodType<T>, body: FormData): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {method: "POST", body});
+  const response = await fetch(`${baseUrl}${path}`, withAuth({method: "POST", body}));
   const value: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const parsed = z.object({error: z.object({message: z.string()})}).safeParse(value);
-    throw new ApiError(response.status, parsed.success ? parsed.data.error.message : `Request failed (${response.status})`);
+    throw failFrom(response, parsed.success ? parsed.data.error.message : null);
   }
   return schema.parse(value);
 }
@@ -379,6 +421,20 @@ export const api = {
   status: (baseUrl: string, workspaceId: string, incidentId: string, status: IncidentStatus, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/status`, incidentSchema, {method: "PATCH", body: JSON.stringify({status, version})}),
   severity: (baseUrl: string, workspaceId: string, incidentId: string, severity: Severity, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/severity`, incidentSchema, {method: "PATCH", body: JSON.stringify({severity, version})}),
   note: (baseUrl: string, workspaceId: string, incidentId: string, summary: string, version: number) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/notes`, timelineSchema, {method: "POST", body: JSON.stringify({summary, version})}),
+  me: (baseUrl: string) => request(baseUrl, "/api/v1/auth/me", meSchema),
+  memberships: (baseUrl: string) => request(baseUrl, "/api/v1/auth/workspaces", z.array(membershipSummarySchema)),
+  wsTicket: (baseUrl: string, workspaceId: string) => request(baseUrl, "/api/v1/auth/ws-ticket", wsTicketSchema, {method: "POST", body: JSON.stringify({workspace_id: workspaceId, channel: "incidents"})}),
+  members: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/members`, z.array(memberSchema)),
+  updateMember: (baseUrl: string, workspaceId: string, membershipId: string, data: {role?: Role; status?: "active" | "suspended"}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/members/${membershipId}`, memberSchema, {method: "PATCH", body: JSON.stringify(data)}),
+  removeMember: (baseUrl: string, workspaceId: string, membershipId: string) => requestEmpty(baseUrl, `/api/v1/workspaces/${workspaceId}/members/${membershipId}`, {method: "DELETE"}),
+  invitations: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/invitations`, z.array(invitationSchema)),
+  createInvitation: (baseUrl: string, workspaceId: string, data: {email: string; role: Role}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/invitations`, invitationCreatedSchema, {method: "POST", body: JSON.stringify(data)}),
+  revokeInvitation: (baseUrl: string, workspaceId: string, invitationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/invitations/${invitationId}/revoke`, invitationSchema, {method: "POST"}),
+  apiKeys: (baseUrl: string, workspaceId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/api-keys`, z.array(apiKeySchema)),
+  createApiKey: (baseUrl: string, workspaceId: string, data: {name: string; scopes: string[]; expires_in_days?: number}) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/api-keys`, apiKeyCreatedSchema, {method: "POST", body: JSON.stringify(data)}),
+  rotateApiKey: (baseUrl: string, workspaceId: string, keyId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/api-keys/${keyId}/rotate`, apiKeyCreatedSchema, {method: "POST"}),
+  revokeApiKey: (baseUrl: string, workspaceId: string, keyId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/api-keys/${keyId}/revoke`, apiKeySchema, {method: "POST"}),
+  auditEvents: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/audit-events?${query}`, auditPageSchema),
   remediations: (baseUrl: string, workspaceId: string, query: URLSearchParams) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations?${query}`, z.array(remediationSummarySchema)),
   remediation: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}`, remediationDetailSchema),
   remediationVerification: (baseUrl: string, workspaceId: string, remediationId: string) => request(baseUrl, `/api/v1/workspaces/${workspaceId}/remediations/${remediationId}/verification`, remediationVerificationSchema),

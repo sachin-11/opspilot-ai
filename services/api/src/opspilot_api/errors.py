@@ -39,7 +39,13 @@ def _response(request: Request, status_code: int, code: str, message: str) -> JS
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, exc: DomainError) -> JSONResponse:
-        return _response(request, exc.status_code, exc.code, str(exc))
+        response = _response(request, exc.status_code, exc.code, str(exc))
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after is not None:
+            response.headers["Retry-After"] = str(retry_after)
+        if exc.status_code == 401:
+            response.headers["WWW-Authenticate"] = "Bearer"
+        return response
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:

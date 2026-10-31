@@ -6,12 +6,14 @@ import { useState } from "react";
 import { api, type RemediationDetail, type RemediationVerification, type SandboxRun } from "@/lib/api";
 import { formatDate } from "./dashboard";
 import { DiffViewer, type BlockedFile } from "./diff-viewer";
+import { can } from "@/lib/permissions";
 import { useOps } from "./providers";
 import { ACTIVE_STATUSES, describeError, IN_FLIGHT_STATUSES, NO_AUTO_MERGE, RETRYABLE_STATUSES, RemediationStatusBadge, shortHash } from "./remediation-common";
 import { ReviewPanel } from "./remediation-review";
 
 export function RemediationDetailView({remediationId}: {remediationId: string}) {
-  const {baseUrl, workspace, connection} = useOps();
+  const ops = useOps();
+  const {baseUrl, workspace, connection} = ops;
   const client = useQueryClient();
   const [message, setMessage] = useState("");
   const key = ["remediation", workspace?.id, remediationId];
@@ -65,7 +67,7 @@ export function RemediationDetailView({remediationId}: {remediationId: string}) 
     <section className="panel"><h3>Model usage</h3><p className="muted">{item.generator_provider} / {item.generator_model} · prompt {item.generator_prompt_version}</p><div className="investigation-metrics"><span>Input tokens <strong>{item.total_input_tokens}</strong></span><span>Output tokens <strong>{item.total_output_tokens}</strong></span><span>Estimated cost <strong>{item.estimated_cost_usd == null ? "Unavailable" : `$${item.estimated_cost_usd.toFixed(4)}`}</strong></span></div></section>
 
     {item.status === "awaiting_approval" && <ReviewPanel remediation={item} verification={verification.data}/>}
-    {item.status === "approved" && <section className="panel"><h3>Approved. Ready to publish</h3><p>Publishing creates one GitHub fix branch, one commit, and one pull request for patch <code>{shortHash(item.patch_hash)}</code>. {NO_AUTO_MERGE}</p>{!item.write_enabled && <p className="notice" role="alert">GitHub write access is disabled for this workspace and repository, so publication is unavailable.</p>}<button className="button primary" disabled={publish.isPending || !item.write_enabled} onClick={() => publish.mutate()}>Create branch and pull request</button></section>}
+    {item.status === "approved" && <section className="panel"><h3>Approved. Ready to publish</h3><p>Publishing creates one GitHub fix branch, one commit, and one pull request for patch <code>{shortHash(item.patch_hash)}</code>. {NO_AUTO_MERGE}</p>{!item.write_enabled && <p className="notice" role="alert">GitHub write access is disabled for this workspace and repository, so publication is unavailable.</p>}<button className="button primary" disabled={publish.isPending || !item.write_enabled || !can(ops, "remediations.publish")} title={can(ops, "remediations.publish") ? undefined : "Requires the remediations.publish permission"} onClick={() => publish.mutate()}>Create branch and pull request</button></section>}
     {item.status === "publishing" && <section className="panel" role="status"><h3>Publishing…</h3><p>Creating the fix branch, commit, and pull request. This page updates automatically.</p><progress aria-label="Publication progress"/></section>}
     {item.pull_request && <PullRequestPanel remediation={item}/>}
 

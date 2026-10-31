@@ -87,6 +87,8 @@ jobs:
       GITHUB_PROVIDER: fixture
       # Module 6: fake model, fixture GitHub provider/writer, no real GitHub writes or paid APIs.
       REMEDIATION_WRITE_PROVIDER: fixture
+      # Module 7: deterministic local identity provider; no Cognito/AWS/email in CI.
+      AUTH_PROVIDER: local
       REMEDIATION_GITHUB_WRITE_ENABLED: "false"
       EVENT_BUS_BACKEND: kafka
       KAFKA_BOOTSTRAP_SERVERS: "127.0.0.1:19092"
@@ -129,6 +131,10 @@ jobs:
         run: docker build -f ../../infra/docker/sandbox.Dockerfile -t opspilot-sandbox:latest ../../infra/docker
       - name: Integration tests (live PostgreSQL, Redis, Kafka-compatible broker, Docker sandbox)
         run: uv run pytest -m integration
+      - name: Authentication, RBAC, and tenant-isolation regression suite
+        run: uv run pytest -m integration tests/test_auth_integration.py tests/test_remediation_integration.py -q
+      - name: Verify audit-log integrity
+        run: uv run python -m opspilot_api.auth.audit_verify
       - name: Deterministic remediation fixture evaluation (fake model, local providers, Docker sandbox)
         run: >-
           uv run python -m opspilot_api.remediation.evaluation

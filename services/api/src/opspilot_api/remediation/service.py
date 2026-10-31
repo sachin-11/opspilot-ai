@@ -10,6 +10,9 @@ from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from opspilot_api.auth.context import Actor, ForbiddenError
+from opspilot_api.auth.permissions import Permission
+from opspilot_api.auth.service import active_membership
 from opspilot_api.config import Settings
 from opspilot_api.incidents.models import Incident, MonitoredService
 from opspilot_api.incidents.service import (
@@ -219,9 +222,11 @@ async def create_remediation(
     workspace_id: UUID,
     investigation_id: UUID,
     provider: RepositoryProvider,
+    actor: Actor,
     retry_of_id: UUID | None = None,
     correlation_id: str | None = None,
 ) -> RemediationProposal:
+    actor.require(Permission.REMEDIATIONS_CREATE)
     investigation, scope = await resolve_eligibility(session, workspace_id, investigation_id)
     head = await _fetch_head(
         provider, scope.installation.provider_installation_id, scope.repository
@@ -247,6 +252,7 @@ async def create_remediation(
         generator_provider=settings.AI_PRIMARY_PROVIDER,
         generator_model=settings.AI_PRIMARY_MODEL,
         structured_output={"scope": {"path_prefix": scope.path_prefix}},
+        requested_by_user_id=actor.user_id,
         version=1,
     )
     session.add(proposal)
@@ -489,8 +495,13 @@ async def remediation_detail(
 
 
 async def cancel_remediation(
-    session: AsyncSession, workspace_id: UUID, remediation_id: UUID, correlation_id: str | None
+    session: AsyncSession,
+    workspace_id: UUID,
+    remediation_id: UUID,
+    correlation_id: str | None,
+    actor: Actor,
 ) -> RemediationProposal:
+    actor.require(Permission.REMEDIATIONS_CREATE)
     proposal = await require_remediation(session, workspace_id, remediation_id)
     if proposal.status == S.CANCELLED.value:
         return proposal
@@ -519,8 +530,10 @@ async def retry_remediation(
     workspace_id: UUID,
     remediation_id: UUID,
     provider: RepositoryProvider,
+    actor: Actor,
     correlation_id: str | None,
 ) -> RemediationProposal:
+    actor.require(Permission.REMEDIATIONS_CREATE)
     previous = await require_remediation(session, workspace_id, remediation_id)
     if S(previous.status) not in RETRYABLE:
         raise ConflictError("remediation cannot be retried from its current status")
@@ -530,6 +543,7 @@ async def retry_remediation(
         workspace_id,
         previous.investigation_id,
         provider,
+        actor,
         previous.id,
         correlation_id,
     )
@@ -550,6 +564,41 @@ async def _fetch_head(
         raise DependencyUnavailableError("cannot confirm repository state") from exc
 
 
+def _separation_of_duties(proposal: RemediationProposal, actor: Actor) -> None:
+    """High-risk fixes need a second pair of eyes: the requester and last reviser cannot approve."""
+    if proposal.risk_level != "high":
+        return
+    if actor.user_id is not None and actor.user_id in {
+        proposal.requested_by_user_id,
+        proposal.last_revised_by_user_id,
+    }:
+        raise ForbiddenError(
+            "separation of duties: requester or last reviser cannot approve a high-risk fix"
+        )
+
+
+async def approver_still_valid(
+    session: AsyncSession, proposal: RemediationProposal, approval: RemediationApproval
+) -> bool:
+    """The approving human must still be an active user holding the review permission."""
+    try:
+        approver = UUID(str(approval.actor_id))
+    except ValueError:
+        return False
+    membership = await active_membership(session, approver, proposal.workspace_id)
+    if membership is None:
+        return False
+    from opspilot_api.auth.permissions import permissions_for
+
+    if Permission.REMEDIATIONS_REVIEW not in permissions_for(membership.role):
+        return False
+    conflicted = proposal.risk_level == "high" and approver in {
+        proposal.requested_by_user_id,
+        proposal.last_revised_by_user_id,
+    }
+    return not conflicted
+
+
 @dataclass(frozen=True)
 class ReviewOutcome:
     approval: RemediationApproval
@@ -566,8 +615,14 @@ async def submit_review(
     remediation_id: UUID,
     data: ReviewRequest,
     provider: RepositoryProvider,
+    actor: Actor,
     correlation_id: str | None = None,
 ) -> ReviewOutcome:
+    # Rechecked here (not only at the route): the reviewer is the verified human actor, never a
+    # client-supplied identity, and API keys or system actors can never review.
+    actor.require(Permission.REMEDIATIONS_REVIEW)
+    if actor.workspace_id != workspace_id:
+        raise ForbiddenError("actor is bound to a different workspace")
     proposal = await require_remediation(session, workspace_id, remediation_id)
     comment = data.comment.strip()
     if data.action is ApprovalAction.APPROVED and proposal.status == S.APPROVED.value:
@@ -590,12 +645,13 @@ async def submit_review(
         "workspace_id": workspace_id,
         "remediation_id": remediation_id,
         "revision_id": revision.id,
-        "actor_id": None,
+        "actor_id": str(actor.user_id),
         "comment": comment,
         "approved_patch_hash": revision.patch_hash,
         "approved_base_commit_sha": revision.base_commit_sha,
     }
     if data.action is ApprovalAction.APPROVED:
+        _separation_of_duties(proposal, actor)
         approval = await _approve(
             session, settings, proposal, revision, base, provider, correlation_id
         )
@@ -616,6 +672,8 @@ async def submit_review(
     session.add(approval)
     await session.flush()
     fields: dict[str, Any] = {"completed_at": utcnow()} if target is S.REJECTED else {}
+    if target is S.DRAFTING:
+        fields["last_revised_by_user_id"] = actor.user_id
     await session.run_sync(lambda sync: transition(sync, proposal, target, **fields))
     record_audit(
         session,
@@ -739,8 +797,10 @@ async def request_publish(
     settings: Settings,
     workspace_id: UUID,
     remediation_id: UUID,
+    actor: Actor,
     correlation_id: str | None = None,
 ) -> PublishRequest:
+    actor.require(Permission.REMEDIATIONS_PUBLISH)
     proposal = await require_remediation(session, workspace_id, remediation_id)
     if proposal.status in {S.PUBLISHING.value, S.PULL_REQUEST_CREATED.value}:
         return PublishRequest(proposal, None, enqueue=False)  # idempotent repeat
@@ -753,6 +813,8 @@ async def request_publish(
     if approval is None:
         raise ConflictError("no approval exists for this remediation")
     problems = await session.run_sync(lambda sync: check_binding(sync, proposal, approval))
+    if not await approver_still_valid(session, proposal, approval):
+        problems = [*problems, "approver_not_authorized"]
     if problems:
         record_audit(
             session,
@@ -772,7 +834,11 @@ async def request_publish(
         )
         await session.commit()
         return PublishRequest(proposal, approval, enqueue=False, reverify=True)
-    await session.run_sync(lambda sync: transition(sync, proposal, S.PUBLISHING))
+    await session.run_sync(
+        lambda sync: transition(
+            sync, proposal, S.PUBLISHING, publish_requested_by_user_id=actor.user_id
+        )
+    )
     record_audit(
         session,
         workspace_id,

@@ -44,13 +44,20 @@ def test_secrets_not_exposed_in_repr() -> None:
     assert TEST_PASSWORD not in settings.database_url.render_as_string(hide_password=True)
 
 
+PROD = {
+    "APP_ENV": Environment.PRODUCTION,
+    "CORS_ORIGINS": "https://app.example.com",
+    "AUTH_PROVIDER": "oidc",
+    "AUTH_OIDC_ISSUER": "https://idp.example.com/pool",
+    "AUTH_OIDC_AUDIENCE": "client-id",
+    "AUTH_AUDIT_KEY": "p" * 40,
+}
+
+
 def test_fake_remediation_sandbox_is_refused_in_production() -> None:
     with pytest.raises(ValueError, match="fake remediation sandbox"):
-        make_settings(
-            APP_ENV=Environment.PRODUCTION,
-            REMEDIATION_SANDBOX_PROVIDER="fake",
-            CORS_ORIGINS="https://app.example.com",
-        )
+        make_settings(**PROD, REMEDIATION_SANDBOX_PROVIDER="fake")
+    assert make_settings(**PROD, REMEDIATION_SANDBOX_PROVIDER="docker")
 
 
 def test_remediation_write_defaults_are_disabled() -> None:

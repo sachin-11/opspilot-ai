@@ -17,6 +17,16 @@ _IDENTIFIER = re.compile(
 )
 
 
+_INLINE_SECRET = re.compile(
+    r"(?i)\b(?:token|secret|password|passwd|api[_-]?key|authorization)\b\s*[=:]\s*\S+"
+    r"|\bospk_[A-Za-z0-9_-]{8,}|\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{4,}|\bBearer\s+\S{12,}"
+)
+
+
+def _mask(value: str) -> str:
+    return _INLINE_SECRET.sub("[REDACTED]", value)
+
+
 def excerpt(value: str, limit: int = MAX_EXCERPT) -> str:
     """Bounded, redacted text safe to store (command output, logs)."""
     return redact_text(value, max_length=limit)
@@ -38,5 +48,5 @@ def scrub_details(value: Any, depth: int = 0) -> Any:
     if isinstance(value, str):
         if _IDENTIFIER.fullmatch(value):
             return value  # hashes, SHAs, and UUIDs must survive byte-for-byte
-        return redact_text(value, max_length=500)
+        return _mask(redact_text(value, max_length=500))
     return value
