@@ -520,6 +520,17 @@ sum(rate(opspilot_http_requests_total{status=~"5.."}[5m])) / sum(rate(opspilot_h
 histogram_quantile(0.95, sum by (le, route) (rate(opspilot_http_request_duration_seconds_bucket[5m])))
 ```
 
+## Data retention
+
+`python -m opspilot_api.maintenance.retention` purges old observability pipeline data. It is **off by default**: set `RETENTION_SIGNAL_RECEIPT_DAYS` and/or `RETENTION_DEAD_LETTER_DAYS` (0 keeps forever; otherwise at least 7 days, so a provider redelivery is still recognised as a duplicate). It is a dry run unless you pass `--apply`:
+
+```powershell
+docker compose exec api python -m opspilot_api.maintenance.retention           # report only
+docker compose exec api python -m opspilot_api.maintenance.retention --apply   # delete in batches
+```
+
+It removes only finished, reproducible data: signal receipts that were processed or deduplicated, and dead letters that were replayed or resolved (with their replay records). Receipts that failed or are dead-lettered, unresolved dead letters, incidents, investigations, and the audit log are never touched; the audit log is append-only (database triggers reject `DELETE`), so any purge of it is a deliberate database-administrator procedure, not this job. Deletion runs in batches of `RETENTION_BATCH_SIZE` so transactions stay short. Run it from a scheduler (cron or Task Scheduler) once you have chosen the periods, and take a backup first the first time you apply it.
+
 ## Backup and restore
 
 `scripts/backup.ps1` writes a checksummed `pg_dump` archive and verifies it can be listed; `scripts/restore.ps1 -Verify` runs a restore drill in a temporary database and drops it, and `-ReplaceLive -ConfirmDatabaseName <db>` performs a guarded recovery. The restore script refuses a corrupt archive, refuses without the exact database name, and refuses while sessions are still connected. See [docs/runbook-backup-restore.md](docs/runbook-backup-restore.md) for what is and is not covered (uploaded knowledge files need their own archive; a restored database also needs `OBS_SECRET_ENCRYPTION_KEY` and `AUTH_AUDIT_KEY`), targets, scheduling, and the disaster-recovery steps.

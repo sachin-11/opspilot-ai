@@ -70,6 +70,13 @@ class Settings(BaseSettings):
 
     DEPENDENCY_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0, le=30)
 
+    # Data retention for the observability pipeline (see maintenance/retention.py). 0 keeps the
+    # data forever, which is the default; otherwise at least 7 days so provider redeliveries are
+    # still recognised as duplicates.
+    RETENTION_SIGNAL_RECEIPT_DAYS: int = Field(default=0, ge=0, le=3650)
+    RETENTION_DEAD_LETTER_DAYS: int = Field(default=0, ge=0, le=3650)
+    RETENTION_BATCH_SIZE: int = Field(default=1000, ge=10, le=10_000)
+
     # Optional error tracking. Unset (or empty) disables it; see error_tracking.py for scrubbing.
     SENTRY_DSN: SecretStr | None = None
     SENTRY_ENVIRONMENT: str | None = Field(default=None, max_length=64)
@@ -284,6 +291,13 @@ class Settings(BaseSettings):
                 or len(parsed.path) < 2
             ):
                 raise ValueError("SENTRY_DSN must look like https://<key>@<host>/<project-id>")
+        return value
+
+    @field_validator("RETENTION_SIGNAL_RECEIPT_DAYS", "RETENTION_DEAD_LETTER_DAYS")
+    @classmethod
+    def _retention_is_off_or_at_least_a_week(cls, value: int) -> int:
+        if 0 < value < 7:
+            raise ValueError("a retention period must be 0 (keep forever) or at least 7 days")
         return value
 
     @field_validator("TRUSTED_PROXY_CIDRS", mode="before")
