@@ -1,0 +1,97 @@
+name: E2E
+
+# Browser tests against the real stack (PostgreSQL, Redis, API, worker, web) with Keycloak as the
+# OIDC provider. Building and starting the stack takes several minutes, so this runs after merges,
+# nightly, and on demand rather than on every pull request.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "43 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Playwright (Chromium, OIDC login)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure the stack (throwaway local values from .env.example, OIDC against Keycloak)
+        run: |
+          cp .env.example .env
+          set_env() { sed -i "s|^$1=.*|$1=$2|" .env; }
+          kc=http://localhost:8180/realms/opspilot
+          kc_internal=http://keycloak:8080/realms/opspilot/protocol/openid-connect
+          set_env AUTH_PROVIDER oidc
+          set_env AUTH_OIDC_ISSUER "$kc"
+          set_env AUTH_OIDC_AUDIENCE opspilot-web
+          set_env AUTH_OIDC_JWKS_URL "$kc_internal/certs"
+          set_env AUTH_MODE oidc
+          set_env OIDC_CLIENT_ID opspilot-web
+          set_env OIDC_AUTHORIZATION_URL "$kc/protocol/openid-connect/auth"
+          set_env OIDC_TOKEN_URL "$kc_internal/token"
+          set_env OIDC_ISSUER "$kc"
+          set_env OIDC_JWKS_URL "$kc_internal/certs"
+
+      - name: Start the database, Redis and API
+        run: docker compose up -d --build --wait postgres redis api
+
+      - name: Apply migrations and set up LangGraph checkpoints
+        run: |
+          docker compose exec -T api alembic upgrade head
+          docker compose exec -T api python -m opspilot_api.investigations.checkpoint_setup
+
+      - name: Start the worker, web and Keycloak
+        run: docker compose --profile idp up -d --build --wait worker web keycloak
+
+      - name: Wait for Keycloak to import the realm
+        run: |
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8180/realms/opspilot/.well-known/openid-configuration >/dev/null && exit 0
+            sleep 3
+          done
+          echo "Keycloak did not become ready" >&2
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install dependencies and the browser
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+
+      - name: Run the end-to-end tests
+        working-directory: apps/web
+        run: pnpm e2e
+
+      - name: Collect service logs
+        if: failure()
+        run: docker compose --profile idp logs --no-color --tail=300 > compose-logs.txt
+
+      - name: Upload the report and logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+            compose-logs.txt
+          retention-days: 7
