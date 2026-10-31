@@ -275,6 +275,8 @@ Responses: `202` accepted (durably published), `200` duplicate (original `signal
 * **Evidence budget:** an investigation now truncates an over-chatty tool's evidence (and records `evidence_truncated`) instead of failing at `AI_MAX_EVIDENCE_ITEMS`, reserving room for the tools that still have to run. `AI_MAX_TOOL_CALLS` defaults to 20 and a plan may contain 16 tool requests.
 
 ### Pipeline verification, load test, and benchmark
+
+For the k6 read-path load test, how to run both tools after Module 7 (they sign in through the local dev provider), and the latest measured results and findings, see [docs/load-testing.md](docs/load-testing.md).
 ```bash
 cd services/api
 uv run python -m opspilot_api.observability.smoke      # deterministic end-to-end smoke test (memory bus)

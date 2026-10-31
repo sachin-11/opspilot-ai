@@ -9,10 +9,12 @@ ignored). Nothing here is a claim about production capacity; it reports what thi
 """
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
 import random
+import secrets
 import statistics
 import time
 import uuid
@@ -21,6 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -97,9 +100,56 @@ def sign(secret: str, body: bytes) -> dict[str, str]:
     return {TIMESTAMP_HEADER: stamp, SIGNATURE_HEADER: digest, "Content-Type": "application/json"}
 
 
+def pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def local_login(client: httpx.Client, api: str, user: str, redirect_origin: str) -> str:
+    """Sign in through the development-only local identity provider (authorization code + PKCE)."""
+    redirect_uri = f"{redirect_origin.rstrip('/')}/api/auth/callback"
+    verifier = secrets.token_urlsafe(48)
+    state = secrets.token_urlsafe(12)
+    authorize = client.get(
+        f"{api}/auth/local/authorize",
+        params={
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "nonce": secrets.token_urlsafe(12),
+            "code_challenge": pkce_challenge(verifier),
+            "login_hint": user,
+        },
+        follow_redirects=False,
+    )
+    code = parse_qs(urlparse(authorize.headers.get("location", "")).query).get("code")
+    if authorize.status_code not in (302, 307) or not code:
+        raise SystemExit(
+            f"local sign-in failed (HTTP {authorize.status_code}); is AUTH_PROVIDER=local and is "
+            f"{redirect_origin} in CORS_ORIGINS? Otherwise pass --auth-token."
+        )
+    token = client.post(
+        f"{api}/auth/local/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code[0],
+            "code_verifier": verifier,
+            "redirect_uri": redirect_uri,
+        },
+    )
+    token.raise_for_status()
+    return str(token.json()["access_token"])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-base", default="http://localhost:8300")
+    parser.add_argument(
+        "--auth-token",
+        default=None,
+        help="bearer token for the control calls; default: sign in with the local dev provider",
+    )
+    parser.add_argument("--local-user", default="owner", help="local dev provider user")
+    parser.add_argument("--redirect-origin", default="http://localhost:3300")
     parser.add_argument("--events", type=int, default=1000)
     parser.add_argument("--rate", type=float, default=100.0, help="events/second; 0 = burst")
     parser.add_argument("--services", type=int, default=3)
@@ -118,14 +168,19 @@ def main() -> None:
     if environment == "production":
         raise SystemExit("refusing to run the load generator against a production environment")
 
+    # Control calls (workspace, services, sources, read-back) are authenticated; the signed webhook
+    # deliveries below deliberately are not, exactly like a real monitoring system.
+    token = args.auth_token or local_login(client, api, args.local_user, args.redirect_origin)
+    control = httpx.Client(timeout=30, headers={"Authorization": f"Bearer {token}"})
     suffix = uuid.uuid4().hex[:8]
-    workspace = client.post(
+    created_workspace = control.post(
         f"{api}/workspaces", json={"name": f"bench {suffix}", "slug": f"bench-{suffix}"}
-    ).json()
-    workspace_id = workspace["id"]
+    )
+    created_workspace.raise_for_status()
+    workspace_id = created_workspace.json()["id"]
     sources: list[tuple[str, str]] = []
     for index in range(args.services):
-        service = client.post(
+        service = control.post(
             f"{api}/workspaces/{workspace_id}/services",
             json={
                 "name": f"Bench Service {index}",
@@ -133,7 +188,7 @@ def main() -> None:
                 "environment": "production",
             },
         ).json()
-        created = client.post(
+        created = control.post(
             f"{api}/workspaces/{workspace_id}/observability/sources",
             json={
                 "name": f"bench-source-{index}",
@@ -184,7 +239,7 @@ def main() -> None:
     deadline = time.time() + args.drain_timeout
     status: dict[str, Any] = {}
     while time.time() < deadline:
-        status = client.get(pipeline_url).json()
+        status = control.get(pipeline_url).json()
         if status.get("consumer_lag") is not None:
             lag_samples.append(int(status["consumer_lag"]))
         settled = status["processed"] + status["duplicates"] + status["failures"]
@@ -200,7 +255,7 @@ def main() -> None:
     items: list[dict[str, Any]] = []
     cursor: str | None = None
     while True:
-        page = client.get(
+        page = control.get(
             f"{api}/workspaces/{workspace_id}/observability/signals?limit=200"
             + (f"&cursor={cursor}" if cursor else "")
         ).json()
