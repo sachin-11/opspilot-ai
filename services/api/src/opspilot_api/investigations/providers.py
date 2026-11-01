@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from opspilot_api.config import Settings
 from opspilot_api.investigations.schemas import (
@@ -254,8 +254,18 @@ class UnsupportedProvider(ModelProvider):
         )
 
 
-def create_provider(provider: str, model: str) -> ModelProvider:
-    return FakeProvider(model) if provider == "fake" else UnsupportedProvider(provider, model)
+def create_provider(
+    provider: str, model: str, *, api_key: SecretStr | None = None, timeout_seconds: float = 30.0
+) -> ModelProvider:
+    if provider == "fake":
+        return FakeProvider(model)
+    if provider == "anthropic":
+        if api_key is None:
+            raise ProviderConfigurationError("anthropic provider requires an API key")
+        from opspilot_api.investigations.anthropic_provider import AnthropicProvider
+
+        return AnthropicProvider(model, api_key, timeout_seconds=timeout_seconds)
+    return UnsupportedProvider(provider, model)
 
 
 class ProviderRouter:
@@ -267,10 +277,18 @@ class ProviderRouter:
     ) -> None:
         self.settings = settings
         self.primary = primary or create_provider(
-            settings.AI_PRIMARY_PROVIDER, settings.AI_PRIMARY_MODEL
+            settings.AI_PRIMARY_PROVIDER,
+            settings.AI_PRIMARY_MODEL,
+            api_key=settings.AI_PRIMARY_API_KEY,
+            timeout_seconds=settings.AI_PROVIDER_TIMEOUT_SECONDS,
         )
         self.fallback = fallback or (
-            create_provider(settings.AI_FALLBACK_PROVIDER, settings.AI_FALLBACK_MODEL)
+            create_provider(
+                settings.AI_FALLBACK_PROVIDER,
+                settings.AI_FALLBACK_MODEL,
+                api_key=settings.AI_FALLBACK_API_KEY,
+                timeout_seconds=settings.AI_PROVIDER_TIMEOUT_SECONDS,
+            )
             if settings.AI_FALLBACK_PROVIDER and settings.AI_FALLBACK_MODEL
             else None
         )

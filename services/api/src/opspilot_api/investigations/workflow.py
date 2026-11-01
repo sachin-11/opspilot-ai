@@ -23,7 +23,11 @@ from opspilot_api.investigations.models import (
     InvestigationStep,
     StepStatus,
 )
-from opspilot_api.investigations.providers import ModelResult, ProviderRouter
+from opspilot_api.investigations.providers import (
+    ModelResult,
+    ProviderConfigurationError,
+    ProviderRouter,
+)
 from opspilot_api.investigations.safety import sanitize_error
 from opspilot_api.investigations.schemas import (
     CritiqueResult,
@@ -33,6 +37,7 @@ from opspilot_api.investigations.schemas import (
     TriageResult,
 )
 from opspilot_api.investigations.tools import ToolContext, execute_tool
+from opspilot_api.llmops.governance import GovernanceFactory
 
 logger = logging.getLogger(__name__)
 MODEL_NODES = {
@@ -131,10 +136,27 @@ class WorkflowRuntime:
     def __init__(self, settings: Settings, provider: ProviderRouter | None = None) -> None:
         self.settings = settings
         self.engine = create_engine(settings.database_url, pool_pre_ping=True)
-        self.provider = provider or ProviderRouter(settings)
+        # An injected router (tests) is used as-is; the default path is governed so every model
+        # call lands in the usage ledger, the shared circuit breaker, and the trace stream.
+        self.provider = provider
+        self.governance = None if provider is not None else GovernanceFactory(settings, self.engine)
+        self._routers: dict[UUID, ProviderRouter] = {}
 
     def close(self) -> None:
+        if self.governance is not None:
+            self.governance.close()
         self.engine.dispose()
+
+    def _router(self, investigation: Investigation) -> ProviderRouter:
+        if self.provider is not None:
+            return self.provider
+        router = self._routers.get(investigation.id)
+        if router is None:
+            if self.governance is None:
+                raise ProviderConfigurationError("no model provider is configured")
+            router = self.governance.router_for(investigation.workspace_id, investigation.id)
+            self._routers[investigation.id] = router
+        return router
 
     def _investigation(self, session: Session, state: InvestigationState) -> Investigation:
         row = session.scalar(
@@ -316,7 +338,7 @@ class WorkflowRuntime:
         context: dict[str, Any],
     ) -> ModelResult:
         self._check_limits(session, investigation)
-        return self.provider.generate(prompt, schema, context)
+        return self._router(investigation).generate(prompt, schema, context)
 
     def load_context(self, state: InvestigationState) -> InvestigationState:
         with Session(self.engine) as session:
@@ -538,6 +560,27 @@ class WorkflowRuntime:
                 self._fail_step(session, investigation, step, exc)
                 raise
 
+    def _evidence_digest(self, state: InvestigationState) -> list[dict[str, str]]:
+        """Stored evidence (id, source, title, excerpt) so a model can cite what it has read."""
+        with Session(self.engine) as session:
+            rows = session.scalars(
+                select(EvidenceItem)
+                .where(
+                    EvidenceItem.investigation_id == UUID(state["investigation_id"]),
+                    EvidenceItem.id.in_([UUID(value) for value in state["evidence_ids"]]),
+                )
+                .order_by(EvidenceItem.collected_at)
+            )
+            return [
+                {
+                    "id": str(row.id),
+                    "source_type": row.source_type,
+                    "title": row.title,
+                    "excerpt": row.excerpt[:800],
+                }
+                for row in rows
+            ]
+
     def hypotheses(self, state: InvestigationState) -> InvestigationState:
         result = self._model_node(
             state,
@@ -548,6 +591,7 @@ class WorkflowRuntime:
             {
                 "incident": state["incident_snapshot"],
                 "observations": state["tool_observations"],
+                "evidence": self._evidence_digest(state),
                 "evidence_ids": state["evidence_ids"],
                 "code_evidence_ids": state.get("code_evidence_ids", []),
                 "observability_evidence_ids": state.get("observability_evidence_ids", []),
@@ -567,6 +611,7 @@ class WorkflowRuntime:
             CritiqueResult,
             {
                 "hypotheses": state["hypotheses"],
+                "evidence": self._evidence_digest(state),
                 "evidence_ids": state["evidence_ids"],
                 "insufficient_evidence": len(state["evidence_ids"]) < 2,
             },
@@ -584,6 +629,7 @@ class WorkflowRuntime:
                 "incident": state["incident_snapshot"],
                 "hypotheses": state["hypotheses"],
                 "critique": state["critique"],
+                "evidence": self._evidence_digest(state),
                 "evidence_ids": state["evidence_ids"],
                 "code_evidence_ids": state.get("code_evidence_ids", []),
                 "observability_evidence_ids": state.get("observability_evidence_ids", []),
@@ -627,6 +673,7 @@ class WorkflowRuntime:
             {
                 "report": state["report"],
                 "human_feedback": state["human_feedback"].get("comment"),
+                "evidence": self._evidence_digest(state),
                 "evidence_ids": state["evidence_ids"],
                 "code_evidence_ids": state.get("code_evidence_ids", []),
                 "observability_evidence_ids": state.get("observability_evidence_ids", []),
